@@ -109,7 +109,9 @@ class PqcV3AttachmentEnvelope {
       encoded.length + ((4 - encoded.length % 4) % 4),
       '=',
     );
-    final decoded = jsonDecode(utf8.decode(base64Url.decode(padded)));
+    final decoded = jsonDecode(
+      utf8.decode(base64Url.decode(padded), allowMalformed: false),
+    );
     if (decoded is! Map<Object?, Object?> ||
         decoded['protocol_version'] != PqcV3Wire.protocolVersion ||
         decoded['cipher_version'] != PqcV3Wire.attachmentCipherVersion ||
@@ -117,6 +119,16 @@ class PqcV3AttachmentEnvelope {
         decoded['wraps'] is! List) {
       throw const FormatException('Invalid V3 attachment envelope.');
     }
+    final parsedWraps = (decoded['wraps'] as List)
+        .map((item) {
+          if (item is! Map) {
+            throw const FormatException(
+              'V3 attachment wraps must contain objects.',
+            );
+          }
+          return PqcV3RecipientWrap.fromJson(Map<String, dynamic>.from(item));
+        })
+        .toList(growable: false);
     return PqcV3AttachmentEnvelope(
       attachmentId: decoded['attachment_id'] as String? ?? '',
       conversationId: decoded['conversation_id'] as int? ?? -1,
@@ -127,13 +139,7 @@ class PqcV3AttachmentEnvelope {
       attachment: PqcV3EncryptedAttachment.fromJson(
         Map<String, dynamic>.from(decoded['attachment'] as Map),
       ),
-      wraps: (decoded['wraps'] as List)
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (item) =>
-                PqcV3RecipientWrap.fromJson(Map<String, dynamic>.from(item)),
-          )
-          .toList(growable: false),
+      wraps: parsedWraps,
       signature: decoded['signature'] as String?,
     );
   }

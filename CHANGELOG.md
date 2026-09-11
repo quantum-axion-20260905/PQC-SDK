@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Closed the secure runtime until account initialization and recovery
+  synchronization complete, and rejected split health-monitor wiring.
+- Hardened decoder, envelope, vault and replay parsing with fail-closed
+  validation for malformed records and ambiguous wire identities.
+- Normalized storage, recovery authorization, transport and key-provider
+  failures into fail-closed domain errors, and reject malformed UTF-8.
+- Kept encrypted writes blocked when recovery restores only historical keys;
+  inbound replay claims now also require an initialized account session.
+- Removed injectable non-cryptographic RNGs from the default primitive suite;
+  test doubles should implement `PqcPrimitiveSuite` explicitly.
+- Added negotiated `group:v2-auth` messages with ML-DSA sender authentication
+  and AES-GCM context binding while retaining frozen `group:v2` history reads.
+
 ## 0.3.0
 
 - Frozen the standalone V3 SDK surface: V3 private/group/attachment codecs,

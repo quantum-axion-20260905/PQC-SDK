@@ -168,6 +168,17 @@ class PqcKeyVaultSnapshot {
 
   factory PqcKeyVaultSnapshot.fromJson(Map<String, dynamic> json) {
     final currentJson = json['current_device_keyset'];
+    if (currentJson != null && currentJson is! Map) {
+      throw const FormatException('Current device keyset must be an object.');
+    }
+    final historicalJson = json['historical_device_keysets'];
+    if (historicalJson != null && historicalJson is! List) {
+      throw const FormatException('Historical device keysets must be a list.');
+    }
+    final groupEpochJson = json['group_epochs'];
+    if (groupEpochJson != null && groupEpochJson is! List) {
+      throw const FormatException('Group epochs must be a list.');
+    }
     return PqcKeyVaultSnapshot(
       schemaVersion: json['schema_version'] as int? ?? 0,
       accountBinding: json['account_binding'] as String? ?? '',
@@ -175,14 +186,21 @@ class PqcKeyVaultSnapshot {
       currentDeviceKeyset: currentJson is Map
           ? _keysetFromJson(Map<String, dynamic>.from(currentJson))
           : null,
-      historicalDeviceKeysets:
-          ((json['historical_device_keysets'] as List<dynamic>?) ?? const [])
-              .whereType<Map<Object?, Object?>>()
-              .map((item) => _keysetFromJson(Map<String, dynamic>.from(item)))
-              .toList(growable: false),
-      groupEpochs: ((json['group_epochs'] as List<dynamic>?) ?? const [])
-          .whereType<Map<Object?, Object?>>()
+      historicalDeviceKeysets: ((historicalJson as List?) ?? const [])
+          .map((item) {
+            if (item is! Map) {
+              throw const FormatException(
+                'Historical device keysets must contain objects.',
+              );
+            }
+            return _keysetFromJson(Map<String, dynamic>.from(item));
+          })
+          .toList(growable: false),
+      groupEpochs: ((groupEpochJson as List?) ?? const [])
           .map((raw) {
+            if (raw is! Map) {
+              throw const FormatException('Group epochs must contain objects.');
+            }
             final item = Map<String, dynamic>.from(raw);
             return PqcVaultGroupEpoch(
               conversationId: item['conversation_id'] as int? ?? -1,
@@ -233,7 +251,15 @@ class PqcIntegrityKeyVault implements PqcKeyVaultRepository {
          store,
          allowInsecureStoreForTesting: allowInsecureStoreForTesting,
        ),
-       _continuityGuard = continuityGuard ?? const PqcKeyContinuityGuard();
+       _continuityGuard = continuityGuard ?? const PqcKeyContinuityGuard() {
+    if (maxCompareAndSetAttempts <= 0) {
+      throw ArgumentError.value(
+        maxCompareAndSetAttempts,
+        'maxCompareAndSetAttempts',
+        'Must be greater than zero.',
+      );
+    }
+  }
 
   static const storageNamespace = 'pqc-engine-sdk.key-vault.v1';
   final PqcAtomicStore _store;
@@ -472,11 +498,14 @@ class PqcIntegrityKeyVault implements PqcKeyVaultRepository {
 
   Future<PqcKeyVaultSnapshot> _read(String accountId) async {
     _requireAccountId(accountId);
-    final record = await _store.read(
-      namespace: storageNamespace,
-      key: _accountKey(accountId),
-    );
+    final record = await _readRecord(accountId);
     if (record == null) return _emptySnapshot(accountId);
+    if (record.revision < 1) {
+      throw const PqcVaultException(
+        PqcVaultFailure.corrupted,
+        'Stored key vault revision is invalid.',
+      );
+    }
     final actualHash = _sha256Hex(record.bytes);
     if (!_constantTimeStringEquals(actualHash, record.sha256)) {
       throw const PqcVaultException(
@@ -485,7 +514,9 @@ class PqcIntegrityKeyVault implements PqcKeyVaultRepository {
       );
     }
     try {
-      final decoded = jsonDecode(utf8.decode(record.bytes));
+      final decoded = jsonDecode(
+        utf8.decode(record.bytes, allowMalformed: false),
+      );
       if (decoded is! Map) throw const FormatException();
       final snapshot = PqcKeyVaultSnapshot.fromJson(
         Map<String, dynamic>.from(decoded),
@@ -526,9 +557,8 @@ class PqcIntegrityKeyVault implements PqcKeyVaultRepository {
           : current.revision + 1;
       final next = _copySnapshot(changed, revision: nextRevision);
       final bytes = utf8.encode(jsonEncode(next.toJson()));
-      final saved = await _store.compareAndSet(
-        namespace: storageNamespace,
-        key: _accountKey(accountId),
+      final saved = await _compareAndSet(
+        accountId: accountId,
         expectedRevision: current.revision == 0 ? null : current.revision,
         value: PqcAtomicRecord(
           revision: next.revision,
@@ -542,6 +572,44 @@ class PqcIntegrityKeyVault implements PqcKeyVaultRepository {
       PqcVaultFailure.writeConflict,
       'Atomic key vault update exceeded its retry limit.',
     );
+  }
+
+  Future<PqcAtomicRecord?> _readRecord(String accountId) async {
+    try {
+      return await _store.read(
+        namespace: storageNamespace,
+        key: _accountKey(accountId),
+      );
+    } on PqcVaultException {
+      rethrow;
+    } catch (_) {
+      throw const PqcVaultException(
+        PqcVaultFailure.unavailable,
+        'Key vault storage is unavailable.',
+      );
+    }
+  }
+
+  Future<bool> _compareAndSet({
+    required String accountId,
+    required int? expectedRevision,
+    required PqcAtomicRecord value,
+  }) async {
+    try {
+      return await _store.compareAndSet(
+        namespace: storageNamespace,
+        key: _accountKey(accountId),
+        expectedRevision: expectedRevision,
+        value: value,
+      );
+    } on PqcVaultException {
+      rethrow;
+    } catch (_) {
+      throw const PqcVaultException(
+        PqcVaultFailure.unavailable,
+        'Key vault storage is unavailable.',
+      );
+    }
   }
 }
 
@@ -614,6 +682,9 @@ void _validateKeyset(PqcDeviceKeyset keyset) {
       'Device id is missing from a keyset.',
     );
   }
+  // Validate the identity delimiter policy at the vault boundary instead of
+  // deferring a malformed keyset until a decrypt attempt.
+  keyset.keysetId;
   try {
     if (base64Decode(keyset.kemPublicKeyBase64).length != 1184 ||
         base64Decode(keyset.kemSecretKeyBase64).length != 2400 ||

@@ -89,6 +89,35 @@ class _RecordingRecoveryAuthorizer implements PqcRecoveryAccessAuthorizer {
   }
 }
 
+class _ThrowingRecoveryAuthorizer implements PqcRecoveryAccessAuthorizer {
+  @override
+  Future<void> authorize({
+    required String accountId,
+    required PqcRecoveryOperation operation,
+  }) async {
+    throw StateError('authorization service offline');
+  }
+}
+
+class _ThrowingRecoveryTransport implements PqcRecoveryRepository {
+  @override
+  Future<PqcRecoverySnapshot?> downloadLatestEncryptedSnapshot(
+    String accountId,
+  ) async {
+    throw StateError('recovery service offline');
+  }
+
+  @override
+  Future<void> uploadEncryptedSnapshot({
+    required String accountId,
+    required int revision,
+    required List<int> encryptedBlob,
+    required String sha256,
+  }) async {
+    throw StateError('recovery service offline');
+  }
+}
+
 class _ConflictingRecoveryTransport
     implements PqcConditionalRecoveryRepository {
   @override
@@ -171,6 +200,283 @@ void main() {
     );
   });
 
+  test(
+    'secure runtime refuses encrypted writes before account initialization',
+    () async {
+      final store = PqcMemoryAtomicStore();
+      final health = PqcCryptoHealthMonitor();
+      final vault = PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: store,
+      );
+      final recovery = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: vault,
+        transport: PqcMemoryRecoveryRepository(),
+        keyProvider: const _FixedRecoveryKeyProvider(3),
+        healthMonitor: health,
+      );
+      final writer = PqcV25Writer();
+      final runtime = PqcSecureRuntime(
+        manager: PqcEngineManager(
+          decoders: [engine],
+          activeWriter: writer,
+          writerEnabled: true,
+          releaseProfile: PqcReleaseProfiles.v25,
+        ),
+        vault: vault,
+        recovery: recovery,
+        replayGuard: PqcReplayGuard(PqcMemoryReplayStore()),
+        healthMonitor: health,
+      );
+
+      expect(
+        () => runtime.requireWriter(
+          kind: PqcConversationKind.private,
+          remote: capabilities,
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+      await expectLater(
+        runtime.prepareWriter(
+          accountId: accountId,
+          kind: PqcConversationKind.private,
+          remote: capabilities,
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+      await expectLater(
+        runtime.acceptInbound(
+          accountId: accountId,
+          conversationId: privateConversation.id,
+          messageId: 'before-init',
+          encryptedPayload: 'ciphertext',
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+      await expectLater(
+        runtime.decryptRetry.decryptPrivate(
+          accountId: accountId,
+          conversation: privateConversation,
+          payload: '',
+          trustedSigningKeysByDevice: const {},
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+
+      await runtime.initializeAccount(accountId);
+      await runtime.rotateDeviceKeyset(
+        accountId: accountId,
+        deviceId: 'initialized-phone',
+      );
+      expect(
+        await runtime.prepareWriter(
+          accountId: accountId,
+          kind: PqcConversationKind.private,
+          remote: capabilities,
+        ),
+        same(writer),
+      );
+      expect(
+        await runtime.acceptInbound(
+          accountId: accountId,
+          conversationId: privateConversation.id,
+          messageId: 'after-init',
+          encryptedPayload: 'ciphertext',
+        ),
+        PqcReplayDecision.accepted,
+      );
+    },
+  );
+
+  test(
+    'recovery normalizes authorization and transport adapter failures',
+    () async {
+      final vault = PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: PqcMemoryAtomicStore(),
+      );
+      final keyProvider = const _FixedRecoveryKeyProvider(7);
+
+      final authorizationFailure = PqcRecoveryCoordinator(
+        vault: vault,
+        transport: PqcMemoryRecoveryRepository(),
+        keyProvider: keyProvider,
+        authorizer: _ThrowingRecoveryAuthorizer(),
+      );
+      await expectLater(
+        authorizationFailure.restoreLatest(accountId),
+        throwsA(
+          isA<PqcRecoveryException>().having(
+            (error) => error.failure,
+            'failure',
+            PqcRecoveryFailure.authorizationRequired,
+          ),
+        ),
+      );
+
+      final transportFailure = PqcRecoveryCoordinator(
+        vault: vault,
+        transport: _ThrowingRecoveryTransport(),
+        keyProvider: keyProvider,
+        allowUnauthenticatedRecoveryForTesting: true,
+      );
+      await expectLater(
+        transportFailure.restoreLatest(accountId),
+        throwsA(
+          isA<PqcRecoveryException>().having(
+            (error) => error.failure,
+            'failure',
+            PqcRecoveryFailure.unavailable,
+          ),
+        ),
+      );
+    },
+  );
+
+  test('history-only recovery keeps current-key writes blocked', () async {
+    final transport = PqcMemoryRecoveryRepository();
+    const keyProvider = _FixedRecoveryKeyProvider(13);
+    final sourceVault = PqcIntegrityKeyVault(
+      allowInsecureStoreForTesting: true,
+      store: PqcMemoryAtomicStore(),
+    );
+    final sourceRecovery = PqcRecoveryCoordinator(
+      allowUnauthenticatedRecoveryForTesting: true,
+      vault: sourceVault,
+      transport: transport,
+      keyProvider: keyProvider,
+    );
+    final historical = engine.generateDeviceKeyset('history-only-phone');
+    await sourceVault.saveDeviceKeyset(
+      accountId: accountId,
+      keyset: historical,
+      makeCurrent: true,
+    );
+    await sourceRecovery.synchronize(accountId);
+    await sourceVault.revokeCurrentDeviceKeyset(
+      accountId: accountId,
+      deviceId: historical.deviceId,
+    );
+    await sourceRecovery.synchronize(accountId);
+
+    final sender = engine.generateDeviceKeyset('history-only-sender');
+    final payload = await engine.private.encrypt(
+      conversation: privateConversation,
+      plaintext: 'history-only message',
+      sender: sender,
+      recipientDevices: [historical.publicKey],
+    );
+    final health = PqcCryptoHealthMonitor();
+    final targetVault = PqcIntegrityKeyVault(
+      allowInsecureStoreForTesting: true,
+      store: PqcMemoryAtomicStore(),
+    );
+    final targetRecovery = PqcRecoveryCoordinator(
+      allowUnauthenticatedRecoveryForTesting: true,
+      vault: targetVault,
+      transport: transport,
+      keyProvider: keyProvider,
+      healthMonitor: health,
+    );
+    final retry = PqcDecryptRetryCoordinator(
+      manager: PqcEngineManager(decoders: [engine]),
+      vault: targetVault,
+      recovery: targetRecovery,
+      healthMonitor: health,
+    );
+
+    final result = await retry.decryptPrivate(
+      accountId: accountId,
+      conversation: privateConversation,
+      payload: payload,
+      trustedSigningKeysByDevice: {
+        sender.deviceId: {sender.signingPublicKeyBase64},
+      },
+    );
+    expect((result as PqcDecoded).plaintext, 'history-only message');
+    expect(
+      health.snapshot.blockingIssues,
+      contains(PqcHealthIssue.currentKeyMissing),
+    );
+    expect(await targetVault.readCurrentDeviceKeyset(accountId), isNull);
+  });
+
+  test('vault rejects an invalid compare-and-set retry budget', () {
+    expect(
+      () => PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: PqcMemoryAtomicStore(),
+        maxCompareAndSetAttempts: 0,
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('vault rejects a persisted zero-revision record', () async {
+    final store = PqcMemoryAtomicStore();
+    final accountBinding = pqcAccountBinding(accountId);
+    await store.compareAndSet(
+      namespace: PqcIntegrityKeyVault.storageNamespace,
+      key: accountBinding,
+      expectedRevision: null,
+      value: PqcAtomicRecord(revision: 0, bytes: [1], sha256: ''),
+    );
+    final vault = PqcIntegrityKeyVault(
+      allowInsecureStoreForTesting: true,
+      store: store,
+    );
+
+    await expectLater(
+      vault.verifyIntegrity(accountId),
+      throwsA(
+        isA<PqcVaultException>().having(
+          (error) => error.failure,
+          'failure',
+          PqcVaultFailure.corrupted,
+        ),
+      ),
+    );
+  });
+
+  test('recovery snapshots reject malformed collection entries', () {
+    expect(
+      () => PqcKeyVaultSnapshot.fromJson({
+        'schema_version': PqcKeyVaultSnapshot.currentSchemaVersion,
+        'account_binding': pqcAccountBinding(accountId),
+        'revision': 0,
+        'current_device_keyset': null,
+        'historical_device_keysets': const <Object?>[42],
+        'group_epochs': const <Object?>[],
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('secure runtime rejects split health-monitor wiring', () {
+    final vault = PqcIntegrityKeyVault(
+      allowInsecureStoreForTesting: true,
+      store: PqcMemoryAtomicStore(),
+    );
+    final recovery = PqcRecoveryCoordinator(
+      allowUnauthenticatedRecoveryForTesting: true,
+      vault: vault,
+      transport: PqcMemoryRecoveryRepository(),
+      keyProvider: const _FixedRecoveryKeyProvider(4),
+    );
+
+    expect(
+      () => PqcSecureRuntime(
+        manager: PqcEngineManager(decoders: [engine]),
+        vault: vault,
+        recovery: recovery,
+        replayGuard: PqcReplayGuard(PqcMemoryReplayStore()),
+        healthMonitor: PqcCryptoHealthMonitor(),
+      ),
+      throwsArgumentError,
+    );
+  });
+
   test('authorized recovery checks every read and write operation', () async {
     final vault = PqcIntegrityKeyVault(
       allowInsecureStoreForTesting: true,
@@ -197,6 +503,52 @@ void main() {
       ]),
     );
   });
+
+  test(
+    'restoring a snapshot without a current key keeps writes blocked',
+    () async {
+      final transport = PqcMemoryRecoveryRepository();
+      const keyProvider = _FixedRecoveryKeyProvider(5);
+      final sourceVault = PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: PqcMemoryAtomicStore(),
+      );
+      final sourceRecovery = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: sourceVault,
+        transport: transport,
+        keyProvider: keyProvider,
+      );
+      await sourceVault.saveGroupEpoch(
+        accountId: accountId,
+        conversationId: groupConversation.id,
+        epoch: PqcGroupEpoch(
+          epochId: 'group-only-epoch',
+          secretKeyBytes: List<int>.filled(32, 5),
+        ),
+      );
+      await sourceRecovery.synchronize(accountId);
+
+      final targetVault = PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: PqcMemoryAtomicStore(),
+      );
+      final health = PqcCryptoHealthMonitor();
+      final targetRecovery = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: targetVault,
+        transport: transport,
+        keyProvider: keyProvider,
+        healthMonitor: health,
+      );
+
+      expect(await targetRecovery.restoreLatest(accountId), isTrue);
+      expect(
+        health.snapshot.blockingIssues,
+        contains(PqcHealthIssue.currentKeyMissing),
+      );
+    },
+  );
 
   test('V2.5 release uses frozen V2 wire and retains its decoder', () {
     final writer = PqcV25Writer();
@@ -297,7 +649,13 @@ void main() {
           keyset: second,
           makeCurrent: true,
         ),
-        throwsStateError,
+        throwsA(
+          isA<PqcVaultException>().having(
+            (error) => error.failure,
+            'failure',
+            PqcVaultFailure.unavailable,
+          ),
+        ),
       );
 
       expect(
@@ -331,8 +689,9 @@ void main() {
           makeCurrent: true,
         );
         committed.add(candidate.keysetId);
-      } on StateError {
+      } on PqcVaultException catch (error) {
         // Simulated crash happened before the atomic commit.
+        expect(error.failure, PqcVaultFailure.unavailable);
       }
       await vault.verifyIntegrity(accountId);
       final snapshot = await vault.exportSnapshot(accountId);

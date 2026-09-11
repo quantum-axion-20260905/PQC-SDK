@@ -73,6 +73,20 @@ class PqcV3Envelope {
     if (wraps != null && wraps is! List) {
       throw const FormatException('V3 recipient wraps must be a list.');
     }
+    final parsedWraps = wraps == null
+        ? const <PqcV3RecipientWrap>[]
+        : (wraps as List)
+              .map((item) {
+                if (item is! Map) {
+                  throw const FormatException(
+                    'V3 recipient wraps must contain objects.',
+                  );
+                }
+                return PqcV3RecipientWrap.fromJson(
+                  Map<String, dynamic>.from(item),
+                );
+              })
+              .toList(growable: false);
     return PqcV3Envelope(
       isGroup: isGroup,
       messageId: decoded['message_id'] as String? ?? '',
@@ -86,13 +100,7 @@ class PqcV3Envelope {
       conversationType: decoded['conversation_type'] as String?,
       senderKeysetId: decoded['sender_keyset_id'] as String?,
       signingPublicKey: decoded['signing_public_key'] as String?,
-      wraps: (wraps as List? ?? const [])
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (item) =>
-                PqcV3RecipientWrap.fromJson(Map<String, dynamic>.from(item)),
-          )
-          .toList(growable: false),
+      wraps: parsedWraps,
       signature: decoded['signature'] as String?,
     );
   }
@@ -132,7 +140,9 @@ Map<String, dynamic> _decodeDocument(String encoded) {
     encoded.length + ((4 - encoded.length % 4) % 4),
     '=',
   );
-  final value = jsonDecode(utf8.decode(base64Url.decode(padded)));
+  final value = jsonDecode(
+    utf8.decode(base64Url.decode(padded), allowMalformed: false),
+  );
   if (value is! Map<Object?, Object?>) {
     throw const FormatException('V3 payload document must be an object.');
   }

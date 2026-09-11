@@ -127,13 +127,21 @@ class PqcV2PrivateCodec {
         return const PqcDecodeError(PqcDecodeFailure.corrupted);
       }
 
-      final wraps = (document['wraps'] as List<dynamic>? ?? const [])
-          .whereType<Map<dynamic, dynamic>>()
-          .map(
-            (value) => value.map(
+      final rawWraps = document['wraps'];
+      if (rawWraps != null && rawWraps is! List) {
+        return const PqcDecodeError(PqcDecodeFailure.corrupted);
+      }
+      final wraps = ((rawWraps as List?) ?? const [])
+          .map((value) {
+            if (value is! Map) {
+              throw const FormatException(
+                'Private recipient wraps must be maps.',
+              );
+            }
+            return value.map(
               (key, item) => MapEntry(key.toString(), item.toString()),
-            ),
-          )
+            );
+          })
           .toList(growable: false);
       PqcDeviceKeyset? selectedKeyset;
       Map<String, String>? selectedWrap;
@@ -181,7 +189,7 @@ class PqcV2PrivateCodec {
         key: contentKey,
       );
       return PqcDecoded(
-        plaintext: utf8.decode(clear),
+        plaintext: utf8.decode(clear, allowMalformed: false),
         protocolVersion: PqcV2Wire.protocolVersion,
       );
     } catch (error) {
@@ -217,7 +225,9 @@ Map<String, dynamic> _decodeDocument(String encoded) {
     encoded.length + ((4 - encoded.length % 4) % 4),
     '=',
   );
-  final value = jsonDecode(utf8.decode(base64Url.decode(padded)));
+  final value = jsonDecode(
+    utf8.decode(base64Url.decode(padded), allowMalformed: false),
+  );
   if (value is! Map<String, dynamic>) {
     throw const FormatException('Payload document must be an object.');
   }

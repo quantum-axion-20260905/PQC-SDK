@@ -76,8 +76,8 @@ abstract interface class PqcPrimitiveSuite {
 }
 
 class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
-  DartPqcPrimitiveSuite({Random? random})
-    : _random = random ?? Random.secure(),
+  DartPqcPrimitiveSuite()
+    : _random = Random.secure(),
       _kem = PqcKem.kyber768,
       _signingParams = DilithiumParams.mlDsa65,
       _cipher = AesGcm.with256bits();

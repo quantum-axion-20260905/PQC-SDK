@@ -13,6 +13,7 @@ UI, HTTP, login, database, file-system or platform-storage dependency.
 - dedicated V2.5 writer profile (`releaseId: 2.5.0`, immutable `v2` wire)
 - independent PQCv3 private/group recipient-wrap reader/writer
 - frozen PQCv2 group-message and group-epoch reader/writer
+- negotiated authenticated `group:v2-auth` group-message writer/reader
 - byte-oriented PQCv2 attachment encryption
 - V3 metadata-authenticated attachment encryption with recipient-device key wraps
 - historical keyset decoding
@@ -127,7 +128,18 @@ account-scoped snapshot and retries only when the recipient keyset is missing.
 An invalid signature, a changed filename/MIME/size, or invalid AES-GCM data is
 not retried and never falls back to V2.
 
+For V2 deployments that need sender authentication and authenticated group
+metadata, use `PqcV2AuthenticatedGroupCodec` and negotiate
+`PqcV2Wire.authenticatedGroupPrefix` with every participant. The original
+`group:v2` format remains frozen for historical compatibility.
+
 ## Secure runtime
+
+A runtime instance must complete initializeAccount before inbound replay claims,
+requireWriter, prepareWriter, key rotation, device revocation or group-epoch
+persistence.
+The runtime and its recovery coordinator must use the same health monitor;
+otherwise recovery failures cannot reach the write gate.
 
 ```dart
 final atomicStore = MyHardwareBackedAtomicStore();
@@ -159,7 +171,8 @@ final writer = await runtime.prepareWriter(
 `rotateDeviceKeyset` returns only after the private key is atomically durable
 and its encrypted recovery revision is synchronized. Publish the returned
 public key only after that future completes. `persistGroupEpochBeforeAck`
-provides the equivalent ordering guarantee for group epochs.
+provides the equivalent ordering guarantee for group epochs. The runtime-owned
+decrypt/retry coordinators and inbound replay guard are also session-gated.
 
 ## Host responsibilities
 
@@ -178,7 +191,9 @@ The integrating application is responsible for:
 9. providing trusted sender signing keys to V3 private/group decrypt calls;
 10. assigning stable unique message ids before using the replay guard;
 11. upload/download streaming, retries and attachment size policy;
-12. keeping logs free of plaintext and secret key material.
+12. keeping logs free of plaintext and secret key material;
+13. keeping device ids free of the keyset-id delimiter |; V2 group-wrap
+    device ids must also be free of the wire delimiter :.
 
 See [SECURITY.md](SECURITY.md), [MIGRATION.md](MIGRATION.md) and
 [RELEASES.md](RELEASES.md).

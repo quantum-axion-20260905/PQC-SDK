@@ -89,7 +89,7 @@ class PqcV2GroupCodec {
         key: epoch.secretKeyBytes,
       );
       return PqcDecoded(
-        plaintext: utf8.decode(clear),
+        plaintext: utf8.decode(clear, allowMalformed: false),
         protocolVersion: PqcV2Wire.protocolVersion,
       );
     } catch (error) {
@@ -107,6 +107,11 @@ class PqcV2GroupCodec {
     required PqcDevicePublicKey recipient,
   }) async {
     _validateEpoch(conversation, epoch);
+    if (sender.deviceId.contains(':') || recipient.deviceId.contains(':')) {
+      // The frozen V2 group-wrap format is colon-delimited. Reject ambiguous
+      // identities rather than emitting a payload that cannot be parsed back.
+      throw ArgumentError('V2 group-wrap device ids must not contain ":".');
+    }
     final kem = _primitives.encapsulate(recipient.kemPublicKeyBase64);
     final key = await _deriveWrapKey(
       sharedSecret: kem.sharedSecret,
@@ -233,7 +238,9 @@ Map<String, dynamic> _decode(String encoded) {
     encoded.length + ((4 - encoded.length % 4) % 4),
     '=',
   );
-  final value = jsonDecode(utf8.decode(base64Url.decode(padded)));
+  final value = jsonDecode(
+    utf8.decode(base64Url.decode(padded), allowMalformed: false),
+  );
   if (value is! Map<String, dynamic>) {
     throw const FormatException('Group payload must be an object.');
   }

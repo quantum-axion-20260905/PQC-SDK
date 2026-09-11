@@ -76,11 +76,15 @@ class PqcEngineManager {
     String? activeWriterId,
     this.writerEnabled = false,
     this.releaseProfile = PqcReleaseProfiles.v2,
-  }) : _decoders = {for (final engine in decoders) engine.engineId: engine} {
+  }) {
+    // A host may pass a lazy or single-use iterable. Materialize it once so
+    // validation and registration observe the same decoder set.
+    final decoderList = List<PqcEngine>.of(decoders, growable: false);
+    _decoders = {for (final engine in decoderList) engine.engineId: engine};
     if (_decoders.isEmpty) {
       throw ArgumentError('At least one decoder must be registered.');
     }
-    if (_decoders.length != decoders.length) {
+    if (_decoders.length != decoderList.length) {
       throw ArgumentError('Engine ids must be unique.');
     }
     if (activeWriter != null && activeWriterId != null) {
@@ -90,6 +94,17 @@ class PqcEngineManager {
     }
     if (activeWriterId != null && !_decoders.containsKey(activeWriterId)) {
       throw ArgumentError('Active writer must be a registered engine.');
+    }
+    final registeredWriter = activeWriter == null
+        ? null
+        : _decoders[activeWriter.engineId];
+    if (activeWriter != null &&
+        registeredWriter != null &&
+        !identical(registeredWriter, activeWriter)) {
+      throw ArgumentError(
+        'An active writer with a registered engine id must be the same instance '
+        'as that registered decoder.',
+      );
     }
     final missing = releaseProfile.requiredDecoderIds.difference(
       _decoders.keys.toSet(),
@@ -118,7 +133,7 @@ class PqcEngineManager {
     }
   }
 
-  final Map<String, PqcEngine> _decoders;
+  late final Map<String, PqcEngine> _decoders;
   late final PqcEngine? _activeWriter;
   final bool writerEnabled;
   final PqcEngineReleaseProfile releaseProfile;

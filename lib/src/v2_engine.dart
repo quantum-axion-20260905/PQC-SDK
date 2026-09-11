@@ -1,6 +1,7 @@
 import 'models.dart';
 import 'primitives.dart';
 import 'v2_attachment_codec.dart';
+import 'v2_authenticated_group_codec.dart';
 import 'v2_group_codec.dart';
 import 'v2_private_codec.dart';
 
@@ -40,12 +41,14 @@ class PqcV2Engine implements PqcEngine {
     : primitives = primitives ?? DartPqcPrimitiveSuite() {
     private = PqcV2PrivateCodec(this.primitives);
     group = PqcV2GroupCodec(this.primitives);
+    authenticatedGroup = PqcV2AuthenticatedGroupCodec(this.primitives);
     attachment = PqcV2AttachmentCodec(this.primitives);
   }
 
   final PqcPrimitiveSuite primitives;
   late final PqcV2PrivateCodec private;
   late final PqcV2GroupCodec group;
+  late final PqcV2AuthenticatedGroupCodec authenticatedGroup;
   late final PqcV2AttachmentCodec attachment;
 
   @override
@@ -73,7 +76,9 @@ class PqcV2Engine implements PqcEngine {
       payload.startsWith('$privatePrefix:');
 
   @override
-  bool recognizesGroup(String payload) => payload.startsWith('$groupPrefix:');
+  bool recognizesGroup(String payload) =>
+      payload.startsWith('$groupPrefix:') ||
+      payload.startsWith('${PqcV2Wire.authenticatedGroupPrefix}:');
 
   @override
   PqcDeviceKeyset generateDeviceKeyset(String deviceId) =>
@@ -94,7 +99,9 @@ class PqcV2Engine implements PqcEngine {
 
   @override
   PqcGroupPayloadMetadata? inspectGroup(String payload) =>
-      group.inspect(payload);
+      payload.startsWith('${PqcV2Wire.authenticatedGroupPrefix}:')
+      ? authenticatedGroup.inspect(payload)
+      : group.inspect(payload);
 
   @override
   Future<PqcDecodeResult> decryptGroup({
@@ -103,9 +110,16 @@ class PqcV2Engine implements PqcEngine {
     required Map<String, PqcGroupEpoch> epochsById,
     Iterable<PqcDeviceKeyset> localKeysets = const [],
     Map<String, Set<String>> trustedSigningKeysByDevice = const {},
-  }) => group.decrypt(
-    conversation: conversation,
-    payload: payload,
-    epochsById: epochsById,
-  );
+  }) => payload.startsWith('${PqcV2Wire.authenticatedGroupPrefix}:')
+      ? authenticatedGroup.decrypt(
+          conversation: conversation,
+          payload: payload,
+          epochsById: epochsById,
+          trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+        )
+      : group.decrypt(
+          conversation: conversation,
+          payload: payload,
+          epochsById: epochsById,
+        );
 }

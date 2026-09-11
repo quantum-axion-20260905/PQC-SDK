@@ -11,6 +11,7 @@ export 'src/replay_guard.dart';
 export 'src/secure_key_vault.dart';
 export 'src/secure_runtime.dart';
 export 'src/v2_attachment_codec.dart';
+export 'src/v2_authenticated_group_codec.dart';
 export 'src/v2_compatibility_decoder.dart';
 export 'src/v2_engine.dart';
 export 'src/v25_writer.dart';

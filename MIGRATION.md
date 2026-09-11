@@ -16,9 +16,16 @@ adapter package. UI, HTTP and platform storage do not enter the engine SDK.
 6. Exercise reinstall, relogin, account switch, key rotation, device revoke
    and group rekey recovery tests.
 7. Enable the selected writer only after the server advertises all required
-   capabilities. V2.5 requires `pqc:v2`/`group:v2`; V3 requires
+   capabilities. V2.5 legacy group writes require `pqc:v2`/`group:v2`; secure
+   V2 group writes additionally require `group:v2-auth`; V3 requires
    `pqc:v3`/`group:v3` and `attachment:v3`.
 8. Roll back by closing the writer gate; keep the decoder registered.
+
+The secure runtime is session-scoped: call initializeAccount after login and
+before inbound replay claims, any writer, rotation, revocation or group-epoch
+persistence operation.
+If recovery initialization fails, the runtime remains closed for writes until
+the account is initialized successfully again.
 
 For V3 groups, obtain the complete current member-device list from the host's
 membership service and pass it as `expectedMemberDevices`. The SDK validates

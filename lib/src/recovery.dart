@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import 'health_monitor.dart';
 import 'key_repository.dart';
+import 'models.dart';
 import 'primitives.dart';
 import 'secure_key_vault.dart';
 
@@ -182,7 +183,9 @@ class PqcRecoveryEnvelopeCodec {
   }) async {
     _validateKey(recoveryKey);
     try {
-      final decoded = jsonDecode(utf8.decode(encryptedBlob));
+      final decoded = jsonDecode(
+        utf8.decode(encryptedBlob, allowMalformed: false),
+      );
       if (decoded is! Map) throw const FormatException();
       final document = Map<String, dynamic>.from(decoded);
       final accountBinding = document['account_binding'] as String? ?? '';
@@ -208,7 +211,9 @@ class PqcRecoveryEnvelopeCodec {
           revision: revision,
         ),
       );
-      final snapshotJson = jsonDecode(utf8.decode(clear));
+      final snapshotJson = jsonDecode(
+        utf8.decode(clear, allowMalformed: false),
+      );
       if (snapshotJson is! Map) throw const FormatException();
       final snapshot = PqcKeyVaultSnapshot.fromJson(
         Map<String, dynamic>.from(snapshotJson),
@@ -284,18 +289,95 @@ class PqcRecoveryCoordinator {
     String accountId,
     PqcRecoveryOperation operation,
   ) async {
-    await _authorizer?.authorize(accountId: accountId, operation: operation);
+    try {
+      await _authorizer?.authorize(accountId: accountId, operation: operation);
+    } on PqcRecoveryException {
+      rethrow;
+    } catch (_) {
+      throw const PqcRecoveryException(
+        PqcRecoveryFailure.authorizationRequired,
+        'Recovery authorization failed.',
+      );
+    }
+  }
+
+  Future<PqcRecoverySnapshot?> _download(String accountId) async {
+    try {
+      return await transport.downloadLatestEncryptedSnapshot(accountId);
+    } on PqcRecoveryException {
+      rethrow;
+    } catch (_) {
+      throw const PqcRecoveryException(
+        PqcRecoveryFailure.unavailable,
+        'Recovery transport is unavailable.',
+      );
+    }
+  }
+
+  Future<List<int>> _recoveryKey(String accountId) async {
+    try {
+      return await keyProvider.recoveryKey(accountId);
+    } on PqcRecoveryException {
+      rethrow;
+    } catch (_) {
+      throw const PqcRecoveryException(
+        PqcRecoveryFailure.unavailable,
+        'Recovery key provider is unavailable.',
+      );
+    }
+  }
+
+  Future<PqcKeyVaultSnapshot> _exportSnapshot(String accountId) async {
+    try {
+      return await vault.exportSnapshot(accountId);
+    } on PqcVaultException {
+      rethrow;
+    } catch (_) {
+      throw const PqcVaultException(
+        PqcVaultFailure.unavailable,
+        'Key vault is unavailable during recovery.',
+      );
+    }
+  }
+
+  Future<void> _mergeSnapshot({
+    required String accountId,
+    required PqcKeyVaultSnapshot snapshot,
+  }) async {
+    try {
+      await vault.mergeSnapshot(accountId: accountId, snapshot: snapshot);
+    } on PqcVaultException {
+      rethrow;
+    } catch (_) {
+      throw const PqcVaultException(
+        PqcVaultFailure.unavailable,
+        'Key vault is unavailable during recovery.',
+      );
+    }
+  }
+
+  Future<PqcDeviceKeyset?> _readCurrentKeyset(String accountId) async {
+    try {
+      return await vault.readCurrentDeviceKeyset(accountId);
+    } on PqcVaultException {
+      rethrow;
+    } catch (_) {
+      throw const PqcVaultException(
+        PqcVaultFailure.unavailable,
+        'Key vault is unavailable during recovery.',
+      );
+    }
   }
 
   Future<bool> restoreLatest(String accountId) async {
     await _authorize(accountId, PqcRecoveryOperation.read);
-    final remote = await transport.downloadLatestEncryptedSnapshot(accountId);
+    final remote = await _download(accountId);
     if (remote == null) {
       healthMonitor.report(PqcHealthIssue.recoveryUnavailable, blocking: false);
       return false;
     }
     _verifyTransportHash(remote);
-    final key = await keyProvider.recoveryKey(accountId);
+    final key = await _recoveryKey(accountId);
     final snapshot = await codec.decrypt(
       accountId: accountId,
       encryptedBlob: remote.encryptedBlob,
@@ -307,17 +389,21 @@ class PqcRecoveryCoordinator {
         'Transport and encrypted recovery revisions disagree.',
       );
     }
-    await vault.mergeSnapshot(accountId: accountId, snapshot: snapshot);
+    await _mergeSnapshot(accountId: accountId, snapshot: snapshot);
     healthMonitor.resolve(PqcHealthIssue.recoveryUnavailable);
-    healthMonitor.resolve(PqcHealthIssue.currentKeyMissing);
+    if (await _readCurrentKeyset(accountId) == null) {
+      healthMonitor.report(PqcHealthIssue.currentKeyMissing, blocking: true);
+    } else {
+      healthMonitor.resolve(PqcHealthIssue.currentKeyMissing);
+    }
     return true;
   }
 
   /// Reconciles local and remote revisions without allowing a downgrade.
   Future<void> synchronize(String accountId) async {
     await _authorize(accountId, PqcRecoveryOperation.read);
-    final local = await vault.exportSnapshot(accountId);
-    final remote = await transport.downloadLatestEncryptedSnapshot(accountId);
+    final local = await _exportSnapshot(accountId);
+    final remote = await _download(accountId);
     if (!local.hasAnyKeyMaterial) {
       if (remote == null) {
         healthMonitor.report(PqcHealthIssue.currentKeyMissing, blocking: true);
@@ -344,7 +430,7 @@ class PqcRecoveryCoordinator {
     final remoteSnapshot = await codec.decrypt(
       accountId: accountId,
       encryptedBlob: remote.encryptedBlob,
-      recoveryKey: await keyProvider.recoveryKey(accountId),
+      recoveryKey: await _recoveryKey(accountId),
     );
     if (!_sameSnapshotMaterial(local, remoteSnapshot)) {
       healthMonitor.report(PqcHealthIssue.recoveryConflict, blocking: true);
@@ -372,17 +458,27 @@ class PqcRecoveryCoordinator {
     final blob = await codec.encrypt(
       accountId: accountId,
       snapshot: local,
-      recoveryKey: await keyProvider.recoveryKey(accountId),
+      recoveryKey: await _recoveryKey(accountId),
     );
     final sha256 = _sha256Hex(blob);
     if (transport case final PqcConditionalRecoveryRepository conditional) {
-      final saved = await conditional.uploadIfCurrentRevision(
-        accountId: accountId,
-        expectedCurrentRevision: expectedRemoteRevision,
-        revision: local.revision,
-        encryptedBlob: blob,
-        sha256: sha256,
-      );
+      late final bool saved;
+      try {
+        saved = await conditional.uploadIfCurrentRevision(
+          accountId: accountId,
+          expectedCurrentRevision: expectedRemoteRevision,
+          revision: local.revision,
+          encryptedBlob: blob,
+          sha256: sha256,
+        );
+      } on PqcRecoveryException {
+        rethrow;
+      } catch (_) {
+        throw const PqcRecoveryException(
+          PqcRecoveryFailure.unavailable,
+          'Recovery transport is unavailable.',
+        );
+      }
       if (!saved) {
         healthMonitor.report(PqcHealthIssue.recoveryConflict, blocking: true);
         throw const PqcRecoveryException(

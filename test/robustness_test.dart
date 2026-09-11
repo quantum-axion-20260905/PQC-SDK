@@ -4,7 +4,79 @@ import 'dart:math';
 import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
 import 'package:test/test.dart';
 
+class _ThrowingAtomicStore implements PqcAtomicStore {
+  @override
+  Future<PqcAtomicRecord?> read({
+    required String namespace,
+    required String key,
+  }) async {
+    throw StateError('storage offline');
+  }
+
+  @override
+  Future<bool> compareAndSet({
+    required String namespace,
+    required String key,
+    required int? expectedRevision,
+    required PqcAtomicRecord value,
+  }) async {
+    throw StateError('storage offline');
+  }
+}
+
 void main() {
+  test('keyset ids reject delimiter-bearing device identities', () {
+    expect(
+      () => computeKeysetId('device|collision', 'public-key'),
+      throwsArgumentError,
+    );
+  });
+
+  test('replay claims require a non-empty encrypted payload', () async {
+    final guard = PqcReplayGuard(PqcMemoryReplayStore());
+    await expectLater(
+      guard.claim(
+        accountBinding: pqcAccountBinding('replay-account'),
+        conversationId: 1,
+        messageId: 'message-1',
+        encryptedPayload: '',
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('atomic replay store rejects malformed digest input', () async {
+    final store = PqcAtomicReplayStore(PqcMemoryAtomicStore());
+    await expectLater(
+      store.claim(
+        accountBinding: 'binding',
+        conversationId: 1,
+        messageId: 'message-1',
+        payloadDigest: 'not-a-sha256-digest',
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('atomic replay store normalizes adapter failures', () async {
+    final store = PqcAtomicReplayStore(_ThrowingAtomicStore());
+    await expectLater(
+      store.claim(
+        accountBinding: 'binding',
+        conversationId: 1,
+        messageId: 'message-1',
+        payloadDigest: 'a' * 64,
+      ),
+      throwsA(
+        isA<PqcVaultException>().having(
+          (error) => error.failure,
+          'failure',
+          PqcVaultFailure.unavailable,
+        ),
+      ),
+    );
+  });
+
   test('malformed private payloads never escape as exceptions', () async {
     final engine = PqcV2Engine();
     final local = engine.primitives.generateDeviceKeyset('local');

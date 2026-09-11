@@ -221,7 +221,7 @@ class PqcV3MessageCodec {
         ),
       );
       return PqcDecoded(
-        plaintext: utf8.decode(clear),
+        plaintext: utf8.decode(clear, allowMalformed: false),
         protocolVersion: PqcV3Wire.protocolVersion,
       );
     } catch (error) {

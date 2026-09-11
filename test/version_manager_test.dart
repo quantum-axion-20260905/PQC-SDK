@@ -1,5 +1,23 @@
+import 'dart:collection';
+
 import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
 import 'package:test/test.dart';
+
+class _SingleUseIterable<T> extends IterableBase<T> {
+  _SingleUseIterable(Iterable<T> values) : _values = List<T>.of(values);
+
+  final List<T> _values;
+  bool _wasIterated = false;
+
+  @override
+  Iterator<T> get iterator {
+    if (_wasIterated) {
+      throw StateError('This iterable may only be iterated once.');
+    }
+    _wasIterated = true;
+    return _values.iterator;
+  }
+}
 
 void main() {
   final engine = PqcV2Engine();
@@ -113,6 +131,34 @@ void main() {
     expect(
       () => PqcEngineManager(decoders: [engine, PqcV2Engine()]),
       throwsArgumentError,
+    );
+  });
+
+  test('rejects a different writer instance with a registered engine id', () {
+    expect(
+      () => PqcEngineManager(
+        decoders: [engine],
+        activeWriter: PqcV2Engine(),
+        writerEnabled: true,
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('registers decoders from a single-use iterable', () {
+    final manager = PqcEngineManager(
+      decoders: _SingleUseIterable([engine]),
+      activeWriterId: engine.engineId,
+      writerEnabled: true,
+    );
+
+    expect(manager.decoders, [same(engine)]);
+    expect(
+      manager.requireWriter(
+        kind: PqcConversationKind.private,
+        remote: capabilities,
+      ),
+      same(engine),
     );
   });
 

@@ -47,6 +47,33 @@ void main() {
     expect(PqcV3Envelope.decode(envelope.encode()).toJson(), envelope.toJson());
   });
 
+  test(
+    'V3 envelope rejects malformed wrap entries instead of dropping them',
+    () {
+      final document = const PqcV3Envelope(
+        isGroup: false,
+        messageId: 'strict-wraps',
+        senderDeviceId: 'sender',
+        keysetId: 'keyset',
+        ciphertext: 'ciphertext',
+        wraps: [
+          PqcV3RecipientWrap(
+            deviceId: 'recipient',
+            keysetId: 'recipient-keyset',
+            kemCiphertext: 'kem',
+            wrappedKey: 'wrap',
+          ),
+        ],
+      ).toJson();
+      document['wraps'] = [...(document['wraps'] as List), 'not-a-wrap'];
+
+      expect(
+        () => PqcV3Envelope.decode(_v3Payload(document, isGroup: false)),
+        throwsA(isA<FormatException>()),
+      );
+    },
+  );
+
   group('PQCv3 private recipient-wrap codec', () {
     const conversation = PqcConversation(id: 301, type: 'private');
 
@@ -305,6 +332,37 @@ void main() {
   });
 
   group('PQCv3 attachment codec', () {
+    test('V3 attachment envelope rejects malformed wrap entries', () {
+      final document = const PqcV3AttachmentEnvelope(
+        attachmentId: 'strict-attachment',
+        conversationId: 1,
+        conversationType: 'private',
+        senderDeviceId: 'sender',
+        senderKeysetId: 'sender-keyset',
+        signingPublicKey: 'signing-key',
+        attachment: PqcV3EncryptedAttachment(
+          filename: 'file.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: 1,
+          ciphertext: 'ciphertext',
+        ),
+        wraps: [
+          PqcV3RecipientWrap(
+            deviceId: 'recipient',
+            keysetId: 'recipient-keyset',
+            kemCiphertext: 'kem',
+            wrappedKey: 'wrap',
+          ),
+        ],
+      ).toJson();
+      document['wraps'] = [...(document['wraps'] as List), 42];
+
+      expect(
+        () => PqcV3AttachmentEnvelope.decode(_v3AttachmentPayload(document)),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
     test('authenticates bytes and immutable metadata', () async {
       final key = engine.attachment.generateContentKey();
       final encrypted = await engine.attachment.encrypt(
@@ -541,6 +599,9 @@ Map<String, dynamic> _v3Document(String payload) {
 
 String _v3Payload(Map<String, dynamic> document, {required bool isGroup}) =>
     '${isGroup ? PqcV3Wire.groupPrefix : PqcV3Wire.privatePrefix}:${base64UrlEncode(utf8.encode(jsonEncode(document)))}';
+
+String _v3AttachmentPayload(Map<String, dynamic> document) =>
+    '${PqcV3AttachmentEnvelope.prefix}:${base64UrlEncode(utf8.encode(jsonEncode(document)))}';
 
 Future<void> _expectCorrupted(
   PqcV3Engine engine,

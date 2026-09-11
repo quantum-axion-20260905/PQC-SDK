@@ -113,8 +113,13 @@ class PqcV2AttachmentCodec {
     required String attachmentId,
     required int manifestSequence,
   }) async {
-    if (conversationEpochId.isEmpty || attachmentId.isEmpty) {
-      throw ArgumentError('Epoch id and attachment id must not be empty.');
+    if (conversationEpochId.isEmpty ||
+        attachmentId.isEmpty ||
+        manifestSequence < 0) {
+      throw ArgumentError(
+        'Epoch id and attachment id must be non-empty and manifest sequence '
+        'must not be negative.',
+      );
     }
     final material = await _primitives.deriveKey(
       secret: conversationEpochSecret,

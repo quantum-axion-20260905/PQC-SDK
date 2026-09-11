@@ -7,9 +7,15 @@ abstract final class PqcV2Wire {
   static const protocolVersion = 2;
   static const privatePrefix = 'pqc:v2';
   static const groupPrefix = 'group:v2';
+
+  /// Authenticated V2 group subformat. The frozen [groupPrefix] remains
+  /// readable for history; new secure group sends use this explicit prefix.
+  static const authenticatedGroupPrefix = 'group:v2-auth';
   static const groupWrapPrefix = 'group-wrap:pqc:v2';
   static const privateAlgorithm = 'ml-kem-768+a256gcm+ml-dsa-65';
   static const groupAlgorithm = 'a256gcm+group-ml-kem-768';
+  static const authenticatedGroupAlgorithm =
+      'a256gcm+group-ml-kem-768+ml-dsa-65';
   static const groupEnvelopeAlgorithm = 'group-ml-kem-768-aesgcm-v2';
   static const attachmentCipherVersion = 'attachment:v2';
 }
@@ -142,6 +148,16 @@ class PqcRemoteCapabilities {
 }
 
 String computeKeysetId(String deviceId, String kemPublicKeyBase64) {
+  // Keyset ids are part of the frozen V2/V3 wire contracts. Keep the legacy
+  // hash formula, but reject its delimiter so two identities cannot share the
+  // same preimage, e.g. a|b plus c versus a plus b|c.
+  if (deviceId.contains('|')) {
+    throw ArgumentError.value(
+      deviceId,
+      'deviceId',
+      'The device id must not contain the keyset-id delimiter "|".',
+    );
+  }
   final digest = crypto.sha256.convert(
     utf8.encode('$deviceId|$kemPublicKeyBase64'),
   );
