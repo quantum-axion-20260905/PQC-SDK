@@ -240,14 +240,28 @@ class PqcSecureRuntime {
   late final PqcDecryptRetryCoordinator decryptRetry;
   late final PqcV3AttachmentDecryptRetryCoordinator v3AttachmentDecryptRetry;
   String? _initializedAccountId;
+  String? _lastAttemptedAccountId;
+  Future<void> _initializationQueue = Future<void>.value();
 
   /// Called after authentication and before messages are loaded or written.
-  Future<void> initializeAccount(String accountId) async {
+  Future<void> initializeAccount(String accountId) {
+    final next = _initializationQueue
+        .catchError((_) {})
+        .then((_) => _initializeAccount(accountId));
+    _initializationQueue = next;
+    return next;
+  }
+
+  Future<void> _initializeAccount(String accountId) async {
     _requireAccountId(accountId);
+    final accountChanged =
+        _lastAttemptedAccountId != null && _lastAttemptedAccountId != accountId;
+    _lastAttemptedAccountId = accountId;
     // Invalidate the previous session before a new account is touched. If
     // reinitialization fails, no account can accidentally keep using the
     // writer through this runtime instance.
     _initializedAccountId = null;
+    if (accountChanged) _resetAccountScopedHealth();
     try {
       await _vaultCall(() => vault.verifyIntegrity(accountId));
       healthMonitor.resolve(PqcHealthIssue.storageCorrupted);
@@ -462,6 +476,14 @@ class PqcSecureRuntime {
     if (accountId.trim().isEmpty) {
       throw ArgumentError.value(accountId, 'accountId', 'Must not be empty.');
     }
+  }
+
+  void _resetAccountScopedHealth() {
+    healthMonitor.resolve(PqcHealthIssue.currentKeyMissing);
+    healthMonitor.resolve(PqcHealthIssue.continuityViolation);
+    healthMonitor.resolve(PqcHealthIssue.recoveryUnavailable);
+    healthMonitor.resolve(PqcHealthIssue.recoveryConflict);
+    healthMonitor.resolve(PqcHealthIssue.replayDetected);
   }
 
   Future<PqcReplayDecision> acceptInbound({

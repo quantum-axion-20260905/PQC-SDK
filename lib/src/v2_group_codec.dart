@@ -32,6 +32,7 @@ class PqcV2GroupCodec {
       final conversationType = document['conversation_type'];
       final epochId = document['group_epoch_id'];
       if (conversationId is! int ||
+          conversationId <= 0 ||
           conversationType is! String ||
           epochId is! String ||
           epochId.isEmpty) {
@@ -87,7 +88,8 @@ class PqcV2GroupCodec {
       }
       if (document['conversation_id'] != conversation.id ||
           document['conversation_type'] != conversation.type ||
-          !conversation.isGroup) {
+          !conversation.isGroup ||
+          conversation.id <= 0) {
         return const PqcDecodeError(PqcDecodeFailure.bindingMismatch);
       }
       final epochId = document['group_epoch_id'] as String? ?? '';
@@ -166,6 +168,7 @@ class PqcV2GroupCodec {
   }) async {
     try {
       if (!conversation.isGroup ||
+          conversation.id <= 0 ||
           !wrappedEpoch.startsWith('${PqcV2Wire.groupWrapPrefix}:')) {
         return null;
       }
@@ -237,7 +240,7 @@ class PqcV2GroupCodec {
   }
 
   void _validateEpoch(PqcConversation conversation, PqcGroupEpoch epoch) {
-    if (!conversation.isGroup) {
+    if (!conversation.isGroup || conversation.id <= 0) {
       throw ArgumentError('Group codec requires a group conversation.');
     }
     if (epoch.epochId.isEmpty || epoch.secretKeyBytes.length != 32) {

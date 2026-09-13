@@ -59,6 +59,7 @@ class PqcV3GroupCodec {
       final envelope = PqcV3Envelope.decode(payload);
       if (!envelope.isGroup ||
           envelope.conversationId == null ||
+          envelope.conversationId! <= 0 ||
           envelope.conversationType == null) {
         return null;
       }

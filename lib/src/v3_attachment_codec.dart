@@ -232,6 +232,7 @@ class PqcV3AttachmentCodec {
     required PqcDeviceKeyset sender,
     required Iterable<PqcDevicePublicKey> recipientDevices,
   }) async {
+    _validateConversation(conversation);
     if (attachmentId.trim().isEmpty) {
       throw ArgumentError.value(
         attachmentId,
@@ -304,6 +305,7 @@ class PqcV3AttachmentCodec {
     required Iterable<PqcDeviceKeyset> localKeysets,
     required Map<String, Set<String>> trustedSigningKeysByDevice,
   }) async {
+    _validateConversation(conversation);
     final envelope = PqcV3AttachmentEnvelope.decode(payload);
     if (envelope.attachmentId.isEmpty ||
         envelope.conversationId != conversation.id ||
@@ -386,6 +388,12 @@ class PqcV3AttachmentCodec {
 
   List<int> _associatedData(String filename, String mimeType, int sizeBytes) =>
       utf8.encode('$filename|$mimeType|$sizeBytes');
+
+  void _validateConversation(PqcConversation conversation) {
+    if (conversation.id <= 0 || !conversation.isSupportedType) {
+      throw ArgumentError('Attachment conversation metadata is invalid.');
+    }
+  }
 
   List<PqcDevicePublicKey> _uniqueRecipients(
     Iterable<PqcDevicePublicKey> supplied,

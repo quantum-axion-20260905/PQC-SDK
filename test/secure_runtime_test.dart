@@ -906,6 +906,111 @@ void main() {
     expect(health.snapshot.isSafeToWrite, isTrue);
   });
 
+  test('account switch resets account-scoped health blockers', () async {
+    final store = PqcMemoryAtomicStore();
+    final vault = PqcIntegrityKeyVault(
+      allowInsecureStoreForTesting: true,
+      store: store,
+    );
+    final health = PqcCryptoHealthMonitor();
+    final recovery = PqcRecoveryCoordinator(
+      allowUnauthenticatedRecoveryForTesting: true,
+      vault: vault,
+      transport: PqcMemoryRecoveryRepository(),
+      keyProvider: const _FixedRecoveryKeyProvider(23),
+      healthMonitor: health,
+    );
+    final runtime = PqcSecureRuntime(
+      manager: PqcEngineManager(decoders: [engine]),
+      vault: vault,
+      recovery: recovery,
+      replayGuard: PqcReplayGuard(PqcAtomicReplayStore(store)),
+      healthMonitor: health,
+    );
+    await vault.saveDeviceKeyset(
+      accountId: accountId,
+      keyset: engine.generateDeviceKeyset('account-one-phone'),
+      makeCurrent: true,
+    );
+    await vault.saveDeviceKeyset(
+      accountId: 'account-two',
+      keyset: engine.generateDeviceKeyset('account-two-phone'),
+      makeCurrent: true,
+    );
+    await runtime.initializeAccount(accountId);
+    health.report(PqcHealthIssue.currentKeyMissing, blocking: true);
+    health.report(PqcHealthIssue.continuityViolation, blocking: true);
+    health.report(PqcHealthIssue.recoveryUnavailable, blocking: true);
+    health.report(PqcHealthIssue.recoveryConflict, blocking: true);
+    health.report(PqcHealthIssue.replayDetected, blocking: true);
+    expect(health.snapshot.isSafeToWrite, isFalse);
+
+    await runtime.initializeAccount('account-two');
+
+    expect(health.snapshot.isSafeToWrite, isTrue);
+  });
+
+  test(
+    'parallel account initialization leaves the last session active',
+    () async {
+      final store = PqcMemoryAtomicStore();
+      final vault = PqcIntegrityKeyVault(
+        allowInsecureStoreForTesting: true,
+        store: store,
+      );
+      final health = PqcCryptoHealthMonitor();
+      final recovery = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: vault,
+        transport: PqcMemoryRecoveryRepository(),
+        keyProvider: const _FixedRecoveryKeyProvider(29),
+        healthMonitor: health,
+      );
+      final writer = PqcV25Writer();
+      final runtime = PqcSecureRuntime(
+        manager: PqcEngineManager(
+          decoders: [engine],
+          activeWriter: writer,
+          writerEnabled: true,
+          releaseProfile: PqcReleaseProfiles.v25,
+        ),
+        vault: vault,
+        recovery: recovery,
+        replayGuard: PqcReplayGuard(PqcMemoryReplayStore()),
+        healthMonitor: health,
+      );
+      await vault.saveDeviceKeyset(
+        accountId: 'parallel-one',
+        keyset: engine.generateDeviceKeyset('parallel-one-phone'),
+        makeCurrent: true,
+      );
+      await vault.saveDeviceKeyset(
+        accountId: 'parallel-two',
+        keyset: engine.generateDeviceKeyset('parallel-two-phone'),
+        makeCurrent: true,
+      );
+
+      await Future.wait([
+        runtime.initializeAccount('parallel-one'),
+        runtime.initializeAccount('parallel-two'),
+      ]);
+
+      await expectLater(
+        runtime.prepareWriter(
+          accountId: 'parallel-one',
+          kind: PqcConversationKind.private,
+          remote: capabilities,
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+      await runtime.prepareWriter(
+        accountId: 'parallel-two',
+        kind: PqcConversationKind.private,
+        remote: capabilities,
+      );
+    },
+  );
+
   test(
     'device revoke preserves decrypt history and blocks writes until rotation',
     () async {

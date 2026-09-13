@@ -15,7 +15,7 @@ class PqcV2PrivateCodec {
     required PqcDeviceKeyset sender,
     required Iterable<PqcDevicePublicKey> recipientDevices,
   }) async {
-    if (conversation.isGroup) {
+    if (conversation.id <= 0 || !conversation.isPrivate) {
       throw ArgumentError('Private codec cannot write a group conversation.');
     }
     final recipients = <String, PqcDevicePublicKey>{};
@@ -106,7 +106,9 @@ class PqcV2PrivateCodec {
           document['algorithm'] != PqcV2Wire.privateAlgorithm) {
         return const PqcDecodeError(PqcDecodeFailure.corrupted);
       }
-      if (document['conversation_id'] != conversation.id ||
+      if (conversation.id <= 0 ||
+          !conversation.isPrivate ||
+          document['conversation_id'] != conversation.id ||
           document['conversation_type'] != conversation.type ||
           conversation.isGroup) {
         return const PqcDecodeError(PqcDecodeFailure.bindingMismatch);

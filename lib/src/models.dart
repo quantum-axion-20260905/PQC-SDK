@@ -40,7 +40,11 @@ class PqcConversation {
   final int id;
   final String type;
 
+  bool get isPrivate => type == 'private';
+
   bool get isGroup => type == 'group';
+
+  bool get isSupportedType => isPrivate || isGroup;
 }
 
 class PqcDevicePublicKey {

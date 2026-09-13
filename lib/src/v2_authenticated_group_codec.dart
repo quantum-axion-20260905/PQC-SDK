@@ -34,6 +34,7 @@ class PqcV2AuthenticatedGroupCodec {
       final conversationType = document['conversation_type'];
       final epochId = document['group_epoch_id'];
       if (conversationId is! int ||
+          conversationId <= 0 ||
           conversationType is! String ||
           epochId is! String ||
           epochId.isEmpty) {
@@ -106,7 +107,8 @@ class PqcV2AuthenticatedGroupCodec {
       }
       if (document['conversation_id'] != conversation.id ||
           document['conversation_type'] != conversation.type ||
-          !conversation.isGroup) {
+          !conversation.isGroup ||
+          conversation.id <= 0) {
         return const PqcDecodeError(PqcDecodeFailure.bindingMismatch);
       }
 
@@ -198,7 +200,7 @@ class PqcV2AuthenticatedGroupCodec {
   }
 
   void _validateEpoch(PqcConversation conversation, PqcGroupEpoch epoch) {
-    if (!conversation.isGroup) {
+    if (!conversation.isGroup || conversation.id <= 0) {
       throw ArgumentError('Group codec requires a group conversation.');
     }
     if (epoch.epochId.isEmpty || epoch.secretKeyBytes.length != 32) {

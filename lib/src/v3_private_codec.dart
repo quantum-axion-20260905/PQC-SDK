@@ -61,7 +61,8 @@ class PqcV3MessageCodec {
     required PqcDeviceKeyset sender,
     required Iterable<PqcDevicePublicKey> recipientDevices,
   }) async {
-    if (conversation.isGroup != isGroup) {
+    if (conversation.id <= 0 ||
+        (isGroup ? !conversation.isGroup : !conversation.isPrivate)) {
       throw ArgumentError('Conversation kind does not match the V3 codec.');
     }
     if (messageId.trim().isEmpty) {
@@ -143,7 +144,8 @@ class PqcV3MessageCodec {
     try {
       final envelope = PqcV3Envelope.decode(payload);
       if (envelope.isGroup != expectedGroup ||
-          conversation.isGroup != expectedGroup ||
+          conversation.id <= 0 ||
+          (expectedGroup ? !conversation.isGroup : !conversation.isPrivate) ||
           envelope.messageId.isEmpty ||
           envelope.senderDeviceId.isEmpty ||
           envelope.keysetId.isEmpty ||
