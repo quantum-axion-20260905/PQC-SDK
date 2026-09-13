@@ -11,6 +11,8 @@ abstract interface class PqcEngine {
   int get protocolVersion;
   String get privatePrefix;
   String get groupPrefix;
+  String get privateAlgorithm;
+  String get groupAlgorithm;
   Set<String> get attachmentCipherVersions;
 
   bool recognizesPrivate(String payload);
@@ -67,6 +69,12 @@ class PqcV2Engine implements PqcEngine {
   String get groupPrefix => PqcV2Wire.groupPrefix;
 
   @override
+  String get privateAlgorithm => PqcV2Wire.privateAlgorithm;
+
+  @override
+  String get groupAlgorithm => PqcV2Wire.groupAlgorithm;
+
+  @override
   Set<String> get attachmentCipherVersions => const {
     PqcV2Wire.attachmentCipherVersion,
   };
@@ -121,5 +129,6 @@ class PqcV2Engine implements PqcEngine {
           conversation: conversation,
           payload: payload,
           epochsById: epochsById,
+          trustedSigningKeysByDevice: trustedSigningKeysByDevice,
         );
 }

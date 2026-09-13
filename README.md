@@ -9,11 +9,11 @@ UI, HTTP, login, database, file-system or platform-storage dependency.
 - ML-KEM-768 recipient key wrapping
 - ML-DSA-65 sender signatures
 - AES-256-GCM content encryption
-- frozen PQCv2 private-message reader/writer and a read-only compatibility facade
-- dedicated V2.5 writer profile (`releaseId: 2.5.0`, immutable `v2` wire)
+- PQCv2 private-message reader/writer and a read-only compatibility facade
+- authenticated PQCv2 group-message reader/writer with legacy history decoding
+- dedicated V2.5 writer profile (`releaseId: 2.5.0`)
 - independent PQCv3 private/group recipient-wrap reader/writer
-- frozen PQCv2 group-message and group-epoch reader/writer
-- negotiated authenticated `group:v2-auth` group-message writer/reader
+- transitional authenticated `group:v2-auth` group-message reader/writer
 - byte-oriented PQCv2 attachment encryption
 - V3 metadata-authenticated attachment encryption with recipient-device key wraps
 - historical keyset decoding
@@ -94,9 +94,14 @@ The host should leave `writerEnabled` false until its recovery, real-device
 and server-capability tests pass. A recognized payload is never retried with a
 different protocol after authentication fails.
 
-`releaseId: 2.5.0` and `wireProtocol: v2` are independent values. V2.5 writes
-immutable `pqc:v2` / `group:v2` payloads through its dedicated writer while
-the frozen V2 decoder remains permanently registered for history.
+`releaseId: 2.5.0` and `wireProtocol: v2` are independent values. V2 and V2.5
+write authenticated `pqc:v2` / `group:v2` payloads through their dedicated
+writer. The V2 decoder also reads the old unauthenticated group algorithm as
+legacy history, but never emits it.
+
+The remote capability record must advertise both the prefixes and the exact
+private/group algorithm identifiers. This prevents an older client that knows
+`group:v2` but cannot verify sender signatures from being selected as a writer.
 
 ## V3 profile and migration
 
@@ -128,10 +133,11 @@ account-scoped snapshot and retries only when the recipient keyset is missing.
 An invalid signature, a changed filename/MIME/size, or invalid AES-GCM data is
 not retried and never falls back to V2.
 
-For V2 deployments that need sender authentication and authenticated group
-metadata, use `PqcV2AuthenticatedGroupCodec` and negotiate
-`PqcV2Wire.authenticatedGroupPrefix` with every participant. The original
-`group:v2` format remains frozen for historical compatibility.
+V2 group writes require `sender:` and use `PqcV2Wire.groupAlgorithm`, including
+an ML-DSA sender signature and AES-GCM context binding. Existing
+`group:v2-auth` payloads remain readable through `PqcV2AuthenticatedGroupCodec`.
+The pre-authenticated `group:v2` algorithm is read-only history and must not be
+used for new production writes.
 
 ## Secure runtime
 

@@ -8,14 +8,14 @@ abstract final class PqcV2Wire {
   static const privatePrefix = 'pqc:v2';
   static const groupPrefix = 'group:v2';
 
-  /// Authenticated V2 group subformat. The frozen [groupPrefix] remains
-  /// readable for history; new secure group sends use this explicit prefix.
+  /// Transitional alias for authenticated V2 group payloads emitted by the
+  /// previous release. New production writes use [groupPrefix] directly.
   static const authenticatedGroupPrefix = 'group:v2-auth';
   static const groupWrapPrefix = 'group-wrap:pqc:v2';
   static const privateAlgorithm = 'ml-kem-768+a256gcm+ml-dsa-65';
-  static const groupAlgorithm = 'a256gcm+group-ml-kem-768';
-  static const authenticatedGroupAlgorithm =
-      'a256gcm+group-ml-kem-768+ml-dsa-65';
+  static const groupAlgorithm = 'a256gcm+group-ml-kem-768+ml-dsa-65';
+  static const legacyGroupAlgorithm = 'a256gcm+group-ml-kem-768';
+  static const authenticatedGroupAlgorithm = groupAlgorithm;
   static const groupEnvelopeAlgorithm = 'group-ml-kem-768-aesgcm-v2';
   static const attachmentCipherVersion = 'attachment:v2';
 }
@@ -135,6 +135,8 @@ class PqcRemoteCapabilities {
     required this.groupReadPrefixes,
     required this.privateWritePrefixes,
     required this.groupWritePrefixes,
+    required this.privateAlgorithms,
+    required this.groupAlgorithms,
     required this.attachmentCipherVersions,
     required this.minimumDecoderVersion,
   });
@@ -143,6 +145,8 @@ class PqcRemoteCapabilities {
   final Set<String> groupReadPrefixes;
   final Set<String> privateWritePrefixes;
   final Set<String> groupWritePrefixes;
+  final Set<String> privateAlgorithms;
+  final Set<String> groupAlgorithms;
   final Set<String> attachmentCipherVersions;
   final int minimumDecoderVersion;
 }

@@ -152,6 +152,8 @@ void main() {
     groupReadPrefixes: {PqcV2Wire.groupPrefix},
     privateWritePrefixes: {PqcV2Wire.privatePrefix},
     groupWritePrefixes: {PqcV2Wire.groupPrefix},
+    privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+    groupAlgorithms: {PqcV2Wire.groupAlgorithm},
     attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
     minimumDecoderVersion: 2,
   );
@@ -550,7 +552,7 @@ void main() {
     },
   );
 
-  test('V2.5 release uses frozen V2 wire and retains its decoder', () {
+  test('V2.5 release uses authenticated V2 wire and retains its decoder', () {
     final writer = PqcV25Writer();
     final manager = PqcEngineManager(
       decoders: [engine],
@@ -1022,6 +1024,7 @@ void main() {
       conversation: groupConversation,
       plaintext: 'group history',
       epoch: epoch,
+      sender: device,
     );
 
     final targetVault = PqcIntegrityKeyVault(
@@ -1044,8 +1047,10 @@ void main() {
       accountId: accountId,
       conversation: groupConversation,
       payload: payload,
+      trustedSigningKeysByDevice: {
+        device.deviceId: {device.signingPublicKeyBase64},
+      },
     );
-
     expect((result as PqcDecoded).plaintext, 'group history');
   });
 
@@ -1091,11 +1096,13 @@ void main() {
       conversation: groupConversation,
       plaintext: 'before rekey',
       epoch: oldEpoch,
+      sender: keyset,
     );
     final newPayload = await engine.group.encrypt(
       conversation: groupConversation,
       plaintext: 'after rekey',
       epoch: newEpoch,
+      sender: keyset,
     );
 
     final restoredVault = PqcIntegrityKeyVault(
@@ -1119,6 +1126,9 @@ void main() {
                 accountId: accountId,
                 conversation: groupConversation,
                 payload: oldPayload,
+                trustedSigningKeysByDevice: {
+                  keyset.deviceId: {keyset.signingPublicKeyBase64},
+                },
               )
               as PqcDecoded)
           .plaintext,
@@ -1129,6 +1139,9 @@ void main() {
                 accountId: accountId,
                 conversation: groupConversation,
                 payload: newPayload,
+                trustedSigningKeysByDevice: {
+                  keyset.deviceId: {keyset.signingPublicKeyBase64},
+                },
               )
               as PqcDecoded)
           .plaintext,

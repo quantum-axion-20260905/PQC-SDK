@@ -3,28 +3,31 @@ import 'dart:convert';
 import 'models.dart';
 import 'primitives.dart';
 
-/// Authenticated V2 group-message subformat.
+/// Authenticated V2 group-message codec.
 ///
-/// The original `group:v2` payload is frozen and remains available for
-/// history. This explicit subformat adds an ML-DSA sender signature and binds
-/// the conversation/epoch/sender context to AES-GCM. It is therefore safe for
-/// new group writes when all participants advertise
-/// [PqcV2Wire.authenticatedGroupPrefix].
+/// The codec is parameterized by its prefix so the production `group:v2`
+/// writer and the transitional `group:v2-auth` alias share exactly the same
+/// authenticated implementation. The old unauthenticated V2 format is
+/// decoded by [PqcV2GroupCodec] only as legacy history.
 class PqcV2AuthenticatedGroupCodec {
-  PqcV2AuthenticatedGroupCodec(this._primitives);
+  PqcV2AuthenticatedGroupCodec(
+    this._primitives, {
+    this.prefix = PqcV2Wire.authenticatedGroupPrefix,
+    this.algorithm = PqcV2Wire.authenticatedGroupAlgorithm,
+  });
 
   final PqcPrimitiveSuite _primitives;
+  final String prefix;
+  final String algorithm;
 
   PqcGroupPayloadMetadata? inspect(String payload) {
     try {
-      if (!payload.startsWith('${PqcV2Wire.authenticatedGroupPrefix}:')) {
+      if (!payload.startsWith('$prefix:')) {
         return null;
       }
-      final document = _decode(
-        payload.substring(PqcV2Wire.authenticatedGroupPrefix.length + 1),
-      );
+      final document = _decode(payload.substring(prefix.length + 1));
       if (document['protocol_version'] != PqcV2Wire.protocolVersion ||
-          document['algorithm'] != PqcV2Wire.authenticatedGroupAlgorithm) {
+          document['algorithm'] != algorithm) {
         return null;
       }
       final conversationId = document['conversation_id'];
@@ -68,7 +71,7 @@ class PqcV2AuthenticatedGroupCodec {
     );
     final unsigned = <String, dynamic>{
       'protocol_version': PqcV2Wire.protocolVersion,
-      'algorithm': PqcV2Wire.authenticatedGroupAlgorithm,
+      'algorithm': algorithm,
       'conversation_id': conversation.id,
       'conversation_type': conversation.type,
       'group_epoch_id': epoch.epochId,
@@ -83,7 +86,7 @@ class PqcV2AuthenticatedGroupCodec {
       message: utf8.encode(jsonEncode(unsigned)),
       secretKeyBase64: sender.signingSecretKeyBase64,
     );
-    return '${PqcV2Wire.authenticatedGroupPrefix}:${_encode({...unsigned, 'signature': signature})}';
+    return '$prefix:${_encode({...unsigned, 'signature': signature})}';
   }
 
   Future<PqcDecodeResult> decrypt({
@@ -92,15 +95,13 @@ class PqcV2AuthenticatedGroupCodec {
     required Map<String, PqcGroupEpoch> epochsById,
     required Map<String, Set<String>> trustedSigningKeysByDevice,
   }) async {
-    if (!payload.startsWith('${PqcV2Wire.authenticatedGroupPrefix}:')) {
+    if (!payload.startsWith('$prefix:')) {
       return const PqcDecodeError(PqcDecodeFailure.unsupported);
     }
     try {
-      final document = _decode(
-        payload.substring(PqcV2Wire.authenticatedGroupPrefix.length + 1),
-      );
+      final document = _decode(payload.substring(prefix.length + 1));
       if (document['protocol_version'] != PqcV2Wire.protocolVersion ||
-          document['algorithm'] != PqcV2Wire.authenticatedGroupAlgorithm) {
+          document['algorithm'] != algorithm) {
         return const PqcDecodeError(PqcDecodeFailure.corrupted);
       }
       if (document['conversation_id'] != conversation.id ||
@@ -173,7 +174,7 @@ class PqcV2AuthenticatedGroupCodec {
   }) => utf8.encode(
     jsonEncode({
       'protocol_version': PqcV2Wire.protocolVersion,
-      'algorithm': PqcV2Wire.authenticatedGroupAlgorithm,
+      'algorithm': algorithm,
       'conversation_id': conversation.id,
       'conversation_type': conversation.type,
       'group_epoch_id': epochId,

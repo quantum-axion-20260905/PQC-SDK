@@ -207,9 +207,25 @@ void main() {
         conversation: conversation,
         plaintext: 'guruh xabari',
         epoch: epoch,
+        sender: alice,
       );
       final metadata = engine.group.inspect(payload);
       expect(metadata, isNotNull);
+      expect(
+        _decodeUrlDocument(
+          payload.substring(PqcV2Wire.groupPrefix.length + 1),
+        )['algorithm'],
+        PqcV2Wire.groupAlgorithm,
+      );
+      final untrusted = await engine.group.decrypt(
+        conversation: conversation,
+        payload: payload,
+        epochsById: {epoch.epochId: epoch},
+      );
+      expect(
+        (untrusted as PqcDecodeError).failure,
+        PqcDecodeFailure.untrustedSender,
+      );
       expect(metadata!.conversationId, conversation.id);
       expect(metadata.conversationType, conversation.type);
       expect(metadata.epochId, epoch.epochId);
@@ -217,8 +233,25 @@ void main() {
         conversation: conversation,
         payload: payload,
         epochsById: {recovered.epochId: recovered},
+        trustedSigningKeysByDevice: _trust(alice),
       );
       expect((result as PqcDecoded).plaintext, 'guruh xabari');
+    });
+
+    test('decodes pre-authenticated group history without emitting it', () async {
+      final box = await primitives.encryptAead(
+        plaintext: utf8.encode('legacy group history'),
+        key: epoch.secretKeyBytes,
+        nonce: primitives.randomBytes(12),
+      );
+      final payload =
+          '${PqcV2Wire.groupPrefix}:${_encodeUrlDocument({'protocol_version': PqcV2Wire.protocolVersion, 'algorithm': PqcV2Wire.legacyGroupAlgorithm, 'conversation_id': conversation.id, 'conversation_type': conversation.type, 'group_epoch_id': epoch.epochId, 'nonce': base64Encode(box.nonce), 'ciphertext': base64Encode(box.ciphertext), 'mac': base64Encode(box.mac)})}';
+      final result = await engine.group.decrypt(
+        conversation: conversation,
+        payload: payload,
+        epochsById: {epoch.epochId: epoch},
+      );
+      expect((result as PqcDecoded).plaintext, 'legacy group history');
     });
 
     test(
@@ -282,11 +315,13 @@ void main() {
         conversation: conversation,
         plaintext: 'tamper',
         epoch: epoch,
+        sender: alice,
       );
       final missing = await engine.group.decrypt(
         conversation: conversation,
         payload: payload,
         epochsById: const {},
+        trustedSigningKeysByDevice: _trust(alice),
       );
       expect((missing as PqcDecodeError).failure, PqcDecodeFailure.keyMissing);
 
@@ -299,18 +334,19 @@ void main() {
         conversation: conversation,
         payload: tampered,
         epochsById: {epoch.epochId: epoch},
+        trustedSigningKeysByDevice: _trust(alice),
       );
       expect((result as PqcDecodeError).failure, PqcDecodeFailure.corrupted);
     });
 
-    test('rejects authenticated plaintext with invalid UTF-8', () async {
+    test('rejects legacy plaintext with invalid UTF-8', () async {
       final box = await primitives.encryptAead(
         plaintext: [0xff],
         key: epoch.secretKeyBytes,
         nonce: primitives.randomBytes(12),
       );
       final payload =
-          '${PqcV2Wire.groupPrefix}:${_encodeUrlDocument({'protocol_version': PqcV2Wire.protocolVersion, 'algorithm': PqcV2Wire.groupAlgorithm, 'conversation_id': conversation.id, 'conversation_type': conversation.type, 'group_epoch_id': epoch.epochId, 'nonce': base64Encode(box.nonce), 'ciphertext': base64Encode(box.ciphertext), 'mac': base64Encode(box.mac)})}';
+          '${PqcV2Wire.groupPrefix}:${_encodeUrlDocument({'protocol_version': PqcV2Wire.protocolVersion, 'algorithm': PqcV2Wire.legacyGroupAlgorithm, 'conversation_id': conversation.id, 'conversation_type': conversation.type, 'group_epoch_id': epoch.epochId, 'nonce': base64Encode(box.nonce), 'ciphertext': base64Encode(box.ciphertext), 'mac': base64Encode(box.mac)})}';
       final result = await engine.group.decrypt(
         conversation: conversation,
         payload: payload,

@@ -28,6 +28,12 @@ class PqcV2CompatibilityDecoder implements PqcEngine {
   String get groupPrefix => _engine.groupPrefix;
 
   @override
+  String get privateAlgorithm => _engine.privateAlgorithm;
+
+  @override
+  String get groupAlgorithm => _engine.groupAlgorithm;
+
+  @override
   Set<String> get attachmentCipherVersions => _engine.attachmentCipherVersions;
 
   @override

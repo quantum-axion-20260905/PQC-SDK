@@ -2,11 +2,18 @@ import 'dart:convert';
 
 import 'models.dart';
 import 'primitives.dart';
+import 'v2_authenticated_group_codec.dart';
 
 class PqcV2GroupCodec {
-  PqcV2GroupCodec(this._primitives);
+  PqcV2GroupCodec(this._primitives)
+    : _authenticated = PqcV2AuthenticatedGroupCodec(
+        _primitives,
+        prefix: PqcV2Wire.groupPrefix,
+        algorithm: PqcV2Wire.groupAlgorithm,
+      );
 
   final PqcPrimitiveSuite _primitives;
+  final PqcV2AuthenticatedGroupCodec _authenticated;
 
   PqcGroupPayloadMetadata? inspect(String payload) {
     try {
@@ -17,7 +24,8 @@ class PqcV2GroupCodec {
         payload.substring(PqcV2Wire.groupPrefix.length + 1),
       );
       if (document['protocol_version'] != PqcV2Wire.protocolVersion ||
-          document['algorithm'] != PqcV2Wire.groupAlgorithm) {
+          (document['algorithm'] != PqcV2Wire.groupAlgorithm &&
+              document['algorithm'] != PqcV2Wire.legacyGroupAlgorithm)) {
         return null;
       }
       final conversationId = document['conversation_id'];
@@ -43,20 +51,19 @@ class PqcV2GroupCodec {
     required PqcConversation conversation,
     required String plaintext,
     required PqcGroupEpoch epoch,
-  }) async {
-    _validateEpoch(conversation, epoch);
-    final box = await _primitives.encryptAead(
-      plaintext: utf8.encode(plaintext),
-      key: epoch.secretKeyBytes,
-      nonce: _primitives.randomBytes(12),
-    );
-    return '${PqcV2Wire.groupPrefix}:${_encode({'protocol_version': PqcV2Wire.protocolVersion, 'algorithm': PqcV2Wire.groupAlgorithm, 'conversation_id': conversation.id, 'conversation_type': conversation.type, 'group_epoch_id': epoch.epochId, 'nonce': base64Encode(box.nonce), 'ciphertext': base64Encode(box.ciphertext), 'mac': base64Encode(box.mac)})}';
-  }
+    required PqcDeviceKeyset sender,
+  }) => _authenticated.encrypt(
+    conversation: conversation,
+    plaintext: plaintext,
+    epoch: epoch,
+    sender: sender,
+  );
 
   Future<PqcDecodeResult> decrypt({
     required PqcConversation conversation,
     required String payload,
     required Map<String, PqcGroupEpoch> epochsById,
+    Map<String, Set<String>> trustedSigningKeysByDevice = const {},
   }) async {
     if (!payload.startsWith('${PqcV2Wire.groupPrefix}:')) {
       return const PqcDecodeError(PqcDecodeFailure.unsupported);
@@ -66,8 +73,17 @@ class PqcV2GroupCodec {
         payload.substring(PqcV2Wire.groupPrefix.length + 1),
       );
       if (document['protocol_version'] != PqcV2Wire.protocolVersion ||
-          document['algorithm'] != PqcV2Wire.groupAlgorithm) {
+          (document['algorithm'] != PqcV2Wire.groupAlgorithm &&
+              document['algorithm'] != PqcV2Wire.legacyGroupAlgorithm)) {
         return const PqcDecodeError(PqcDecodeFailure.corrupted);
+      }
+      if (document['algorithm'] == PqcV2Wire.groupAlgorithm) {
+        return await _authenticated.decrypt(
+          conversation: conversation,
+          payload: payload,
+          epochsById: epochsById,
+          trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+        );
       }
       if (document['conversation_id'] != conversation.id ||
           document['conversation_type'] != conversation.type ||
@@ -229,9 +245,6 @@ class PqcV2GroupCodec {
     }
   }
 }
-
-String _encode(Map<String, dynamic> value) =>
-    base64UrlEncode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
 
 Map<String, dynamic> _decode(String encoded) {
   final padded = encoded.padRight(

@@ -37,7 +37,7 @@ abstract final class PqcReleaseProfiles {
     requiredDecoderIds: {'pqc-v2'},
   );
 
-  /// V2.5 intentionally keeps the immutable V2 wire format and decoder.
+  /// V2.5 keeps the V2 protocol family while using authenticated V2 writes.
   static const v25 = PqcEngineReleaseProfile(
     releaseId: '2.5.0',
     wireProtocol: PqcWireProtocols.v2,
@@ -45,8 +45,8 @@ abstract final class PqcReleaseProfiles {
     requiredDecoderIds: {'pqc-v2'},
   );
 
-  /// V3 writes only its own wire format but permanently retains the frozen V2
-  /// decoder.  The release profile is intentionally separate from V2.5: an
+  /// V3 writes only its own wire format but permanently retains the V2 history
+  /// decoder. The release profile is intentionally separate from V2.5: an
   /// application chooses one profile, it does not silently downgrade writes.
   static const v3 = PqcEngineReleaseProfile(
     releaseId: '3.0.0',
@@ -187,6 +187,16 @@ class PqcEngineManager {
     if (!readable || !writable) {
       throw PqcCompatibilityException(
         'Remote endpoint cannot safely read and write ${writer.engineId}.',
+      );
+    }
+    final algorithmSupported = kind == PqcConversationKind.private
+        ? remote.privateAlgorithms.contains(writer.privateAlgorithm)
+        : remote.groupAlgorithms.contains(writer.groupAlgorithm);
+    if (!algorithmSupported) {
+      throw PqcCompatibilityException(
+        'Remote endpoint cannot read and write the authenticated '
+        '${kind == PqcConversationKind.private ? 'private' : 'group'} '
+        'algorithm for ${writer.engineId}.',
       );
     }
     if (writer.protocolVersion < remote.minimumDecoderVersion) {

@@ -9,8 +9,8 @@
 - V3 per-recipient ML-KEM content-key wraps, including the sender device;
 - V3 attachment file-key wraps with authenticated filename, MIME type and
   plaintext-size metadata;
-- authenticated `group:v2-auth` messages with ML-DSA sender signatures and
-  AES-GCM context binding;
+- authenticated new `group:v2` and transitional `group:v2-auth` messages with
+  ML-DSA sender signatures and AES-GCM context binding;
 - V3 ML-DSA-65 signed envelope binding for conversation, message, sender and
   keyset metadata;
 - historical private-key decoding;
@@ -57,11 +57,13 @@ Never log plaintext, private keys, shared secrets, attachment descriptors or
 full encrypted recovery blobs. Error telemetry should contain only a stable
 error category and non-secret correlation id.
 
-For new V2 group writes, advertise and require
-`PqcV2Wire.authenticatedGroupPrefix` (`group:v2-auth`) on every participant,
-then use `PqcV2AuthenticatedGroupCodec`. The frozen `group:v2` format remains
-available only for compatibility/history and does not gain sender or metadata
-authentication retroactively.
+For every new V2 group write, require the sender keyset and advertise
+`PqcV2Wire.groupAlgorithm` in the remote `groupAlgorithms` capability. New
+`group:v2` payloads include an ML-DSA sender signature and bind conversation,
+epoch and sender metadata into AES-GCM. The transitional `group:v2-auth`
+prefix remains readable for payloads emitted by the previous release. The old
+unauthenticated `group:v2` algorithm is decode-only history and is never
+emitted by the current writer.
 
 Before encrypted writes, hosts must complete account initialization and keep the
 runtime and recovery coordinator attached to the same health monitor. Device
@@ -72,15 +74,13 @@ current-key write block.
 
 ## Cryptographic changes
 
-PQCv2 constants and serialization are frozen. V3 has a separately versioned
-envelope and attachment cipher. Changing a prefix, algorithm label, field,
-field order, signing context, HKDF input or nonce derivation requires a new
-engine version and decoder. Never silently mutate a released wire format.
-
-The frozen V2 group message format authenticates ciphertext with the shared
-group epoch key but does not identify the individual sender or bind envelope
-metadata as AEAD associated data. The negotiated `group:v2-auth` subformat
-closes those gaps for new messages without changing frozen `group:v2` history.
+V2 private serialization, group wrapping and attachments remain compatible
+with their released contracts. The V2 group message write algorithm was
+explicitly advanced for the production transition: current writers emit the
+authenticated algorithm, while the previous unauthenticated algorithm is
+accepted only for history. V3 retains its separately versioned envelope and
+attachment cipher. Any future prefix, algorithm, field-order, signing-context,
+HKDF or nonce change requires a new engine version and decoder.
 
 Security reports: contact the repository owner through a private channel. Do
 not open a public issue containing keys or production payloads.

@@ -12,8 +12,12 @@
   inbound replay claims now also require an initialized account session.
 - Removed injectable non-cryptographic RNGs from the default primitive suite;
   test doubles should implement `PqcPrimitiveSuite` explicitly.
-- Added negotiated `group:v2-auth` messages with ML-DSA sender authentication
-  and AES-GCM context binding while retaining frozen `group:v2` history reads.
+- Made authenticated `group:v2` the default production write format, including
+  ML-DSA sender authentication and AES-GCM context binding. The previous
+  unauthenticated group algorithm remains decode-only history, and the
+  transitional `group:v2-auth` prefix remains readable.
+- Added exact private/group algorithm capability checks so old clients cannot
+  be selected as writers merely because they advertise a shared prefix.
 
 ## 0.3.0
 

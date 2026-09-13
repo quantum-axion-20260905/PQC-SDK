@@ -9,7 +9,7 @@ import 'version_manager.dart';
 ///
 /// Hosts should use a bundle instead of independently assembling decoders and
 /// writers. This avoids accidentally registering V2.5 as a decoder or
-/// omitting the frozen V2 history reader during an upgrade.
+/// omitting the V2 history reader during an upgrade.
 class PqcEngineBundle {
   const PqcEngineBundle({
     required this.manager,
@@ -26,11 +26,8 @@ class PqcEngineBundle {
 /// the host must explicitly opt in only after its recovery and capability
 /// checks are ready.
 abstract final class PqcEngineBundles {
-  /// Frozen V2 release assembly.
-  ///
-  /// This is retained for installations that intentionally continue writing
-  /// the immutable V2 wire format. Newer profiles must register it only as a
-  /// history decoder rather than silently selecting it as a fallback writer.
+  /// V2 release assembly with authenticated group writes and legacy history
+  /// decoding.
   static PqcEngineBundle v2({
     PqcPrimitiveSuite? primitives,
     bool writerEnabled = false,

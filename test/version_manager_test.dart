@@ -26,6 +26,8 @@ void main() {
     groupReadPrefixes: {PqcV2Wire.groupPrefix},
     privateWritePrefixes: {PqcV2Wire.privatePrefix},
     groupWritePrefixes: {PqcV2Wire.groupPrefix},
+    privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+    groupAlgorithms: {PqcV2Wire.groupAlgorithm},
     attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
     minimumDecoderVersion: 2,
   );
@@ -65,6 +67,8 @@ void main() {
           groupReadPrefixes: {},
           privateWritePrefixes: {PqcV2Wire.privatePrefix},
           groupWritePrefixes: {},
+          privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+          groupAlgorithms: {PqcV2Wire.groupAlgorithm},
           attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
           minimumDecoderVersion: 2,
         ),
@@ -72,6 +76,33 @@ void main() {
       throwsA(isA<PqcCompatibilityException>()),
     );
   });
+
+  test(
+    'capability gate rejects a shared prefix without the exact algorithm',
+    () {
+      final manager = PqcEngineManager(
+        decoders: [engine],
+        activeWriterId: engine.engineId,
+        writerEnabled: true,
+      );
+      expect(
+        () => manager.requireWriter(
+          kind: PqcConversationKind.group,
+          remote: const PqcRemoteCapabilities(
+            privateReadPrefixes: {PqcV2Wire.privatePrefix},
+            groupReadPrefixes: {PqcV2Wire.groupPrefix},
+            privateWritePrefixes: {PqcV2Wire.privatePrefix},
+            groupWritePrefixes: {PqcV2Wire.groupPrefix},
+            privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+            groupAlgorithms: {},
+            attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
+            minimumDecoderVersion: 2,
+          ),
+        ),
+        throwsA(isA<PqcCompatibilityException>()),
+      );
+    },
+  );
 
   test('rejects read/write asymmetry and decoder downgrade', () {
     final manager = PqcEngineManager(
@@ -87,6 +118,8 @@ void main() {
           groupReadPrefixes: {PqcV2Wire.groupPrefix},
           privateWritePrefixes: {PqcV2Wire.privatePrefix},
           groupWritePrefixes: {PqcV2Wire.groupPrefix},
+          privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+          groupAlgorithms: {PqcV2Wire.groupAlgorithm},
           attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
           minimumDecoderVersion: 2,
         ),
@@ -101,6 +134,8 @@ void main() {
           groupReadPrefixes: {PqcV2Wire.groupPrefix},
           privateWritePrefixes: {PqcV2Wire.privatePrefix},
           groupWritePrefixes: {PqcV2Wire.groupPrefix},
+          privateAlgorithms: {PqcV2Wire.privateAlgorithm},
+          groupAlgorithms: {PqcV2Wire.groupAlgorithm},
           attachmentCipherVersions: {PqcV2Wire.attachmentCipherVersion},
           minimumDecoderVersion: 3,
         ),
@@ -194,6 +229,8 @@ void main() {
         groupReadPrefixes: {PqcV3Wire.groupPrefix},
         privateWritePrefixes: {PqcV3Wire.privatePrefix},
         groupWritePrefixes: {PqcV3Wire.groupPrefix},
+        privateAlgorithms: {PqcV3Wire.privateAlgorithm},
+        groupAlgorithms: {PqcV3Wire.groupAlgorithm},
         attachmentCipherVersions: {PqcV3Wire.attachmentCipherVersion},
         minimumDecoderVersion: 3,
       ),
@@ -290,14 +327,17 @@ void main() {
     expect((result as PqcDecoded).plaintext, 'frozen history');
   });
 
-  test('V2 bundle keeps the frozen V2 writer and wire profile together', () {
-    final bundle = PqcEngineBundles.v2(writerEnabled: true);
+  test(
+    'V2 bundle keeps the authenticated V2 writer and wire profile together',
+    () {
+      final bundle = PqcEngineBundles.v2(writerEnabled: true);
 
-    expect(bundle.writer, isA<PqcV2Engine>());
-    expect(bundle.decoders, hasLength(1));
-    expect(bundle.decoders.single, same(bundle.writer));
-    expect(bundle.manager.releaseProfile, same(PqcReleaseProfiles.v2));
-  });
+      expect(bundle.writer, isA<PqcV2Engine>());
+      expect(bundle.decoders, hasLength(1));
+      expect(bundle.decoders.single, same(bundle.writer));
+      expect(bundle.manager.releaseProfile, same(PqcReleaseProfiles.v2));
+    },
+  );
 
   test(
     'V2.5 bundle fixes the reader/writer boundary and all V2 wire codecs',
@@ -343,6 +383,7 @@ void main() {
         conversation: groupConversation,
         plaintext: 'V2.5 group',
         epoch: epoch,
+        sender: sender,
       );
       final groupResult = await bundle.manager
           .resolveDecoder(
@@ -353,6 +394,9 @@ void main() {
             conversation: groupConversation,
             payload: groupPayload,
             epochsById: {epoch.epochId: epoch},
+            trustedSigningKeysByDevice: {
+              sender.deviceId: {sender.signingPublicKeyBase64},
+            },
           );
       expect((groupResult as PqcDecoded).plaintext, 'V2.5 group');
 
@@ -391,6 +435,8 @@ const _v3Capabilities = PqcRemoteCapabilities(
   groupReadPrefixes: {PqcV3Wire.groupPrefix},
   privateWritePrefixes: {PqcV3Wire.privatePrefix},
   groupWritePrefixes: {PqcV3Wire.groupPrefix},
+  privateAlgorithms: {PqcV3Wire.privateAlgorithm},
+  groupAlgorithms: {PqcV3Wire.groupAlgorithm},
   attachmentCipherVersions: {PqcV3Wire.attachmentCipherVersion},
   minimumDecoderVersion: 3,
 );

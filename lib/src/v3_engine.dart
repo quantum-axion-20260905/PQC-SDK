@@ -37,6 +37,12 @@ class PqcV3Engine implements PqcEngine {
   String get groupPrefix => PqcV3Wire.groupPrefix;
 
   @override
+  String get privateAlgorithm => PqcV3Wire.privateAlgorithm;
+
+  @override
+  String get groupAlgorithm => PqcV3Wire.groupAlgorithm;
+
+  @override
   Set<String> get attachmentCipherVersions => const {
     PqcV3Wire.attachmentCipherVersion,
   };

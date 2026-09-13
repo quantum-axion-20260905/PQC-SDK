@@ -15,6 +15,12 @@ by default. A host opens a
 writer only after its storage health, encrypted recovery synchronization and
 remote capability checks succeed.
 
+V2 and V2.5 group writers emit `PqcV2Wire.groupAlgorithm` and require that
+exact identifier in `PqcRemoteCapabilities.groupAlgorithms`. The previous
+unauthenticated `PqcV2Wire.legacyGroupAlgorithm` is retained only for history
+decoding; advertising the shared `group:v2` prefix alone is insufficient for
+write compatibility.
+
 ## Immutable history rule
 
 When a future engine is released:

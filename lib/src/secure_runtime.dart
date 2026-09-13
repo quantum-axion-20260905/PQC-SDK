@@ -107,7 +107,7 @@ class PqcDecryptRetryCoordinator {
 
     Future<PqcDecodeResult> attempt() async {
       final epochs = <String, PqcGroupEpoch>{};
-      // Frozen V2 group payloads use an epoch id.  V3 group payloads use
+      // V2 group payloads use an epoch id. V3 group payloads use
       // recipient-device key wraps and intentionally expose an empty epoch id.
       if (metadata.epochId.isNotEmpty) {
         final epoch = await _vaultCall(
