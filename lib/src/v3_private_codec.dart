@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'crypto_utils.dart';
 import 'models.dart';
 import 'primitives.dart';
 import 'v3_envelope.dart';
@@ -70,32 +71,41 @@ class PqcV3MessageCodec {
     }
     final recipients = _uniqueRecipients(recipientDevices, sender.publicKey);
     final contentKey = _primitives.randomBytes(32);
-    final encrypted = await _encryptPacked(
-      plaintext: utf8.encode(plaintext),
-      contentKey: contentKey,
-      associatedData: _associatedData(
-        conversation: conversation,
-        messageId: messageId,
-        senderDeviceId: sender.deviceId,
-        senderKeysetId: sender.keysetId,
-      ),
-    );
+    late final Uint8List encrypted;
     final wraps = <PqcV3RecipientWrap>[];
-    for (final recipient in recipients) {
-      final kem = _primitives.encapsulate(recipient.kemPublicKeyBase64);
-      final wrapped = await _encryptPacked(
-        plaintext: contentKey,
-        contentKey: kem.sharedSecret,
-        associatedData: utf8.encode('$messageId:${recipient.deviceId}'),
-      );
-      wraps.add(
-        PqcV3RecipientWrap(
-          deviceId: recipient.deviceId,
-          keysetId: recipient.keysetId,
-          kemCiphertext: kem.ciphertextBase64,
-          wrappedKey: base64Encode(wrapped),
+    try {
+      encrypted = await _encryptPacked(
+        plaintext: utf8.encode(plaintext),
+        contentKey: contentKey,
+        associatedData: _associatedData(
+          conversation: conversation,
+          messageId: messageId,
+          senderDeviceId: sender.deviceId,
+          senderKeysetId: sender.keysetId,
         ),
       );
+      for (final recipient in recipients) {
+        final kem = _primitives.encapsulate(recipient.kemPublicKeyBase64);
+        try {
+          final wrapped = await _encryptPacked(
+            plaintext: contentKey,
+            contentKey: kem.sharedSecret,
+            associatedData: utf8.encode('$messageId:${recipient.deviceId}'),
+          );
+          wraps.add(
+            PqcV3RecipientWrap(
+              deviceId: recipient.deviceId,
+              keysetId: recipient.keysetId,
+              kemCiphertext: kem.ciphertextBase64,
+              wrappedKey: base64Encode(wrapped),
+            ),
+          );
+        } finally {
+          kem.zeroize();
+        }
+      }
+    } finally {
+      secureZero(contentKey);
     }
     final unsigned = PqcV3Envelope(
       isGroup: isGroup,
@@ -201,31 +211,40 @@ class PqcV3MessageCodec {
       if (selectedKeyset == null || selectedWrap == null) {
         return const PqcDecodeError(PqcDecodeFailure.keyMissing);
       }
-      final sharedSecret = _primitives.decapsulate(
-        ciphertextBase64: selectedWrap.kemCiphertext,
-        secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
-      );
-      final contentKey = await _decryptPacked(
-        ciphertext: base64Decode(selectedWrap.wrappedKey),
-        contentKey: sharedSecret,
-        associatedData: utf8.encode(
-          '${envelope.messageId}:${selectedKeyset.deviceId}',
-        ),
-      );
-      final clear = await _decryptPacked(
-        ciphertext: base64Decode(envelope.ciphertext),
-        contentKey: contentKey,
-        associatedData: _associatedData(
-          conversation: conversation,
-          messageId: envelope.messageId,
-          senderDeviceId: envelope.senderDeviceId,
-          senderKeysetId: envelope.senderKeysetId!,
-        ),
-      );
-      return PqcDecoded(
-        plaintext: utf8.decode(clear, allowMalformed: false),
-        protocolVersion: PqcV3Wire.protocolVersion,
-      );
+      Uint8List? sharedSecret;
+      Uint8List? contentKey;
+      Uint8List? clear;
+      try {
+        sharedSecret = _primitives.decapsulate(
+          ciphertextBase64: selectedWrap.kemCiphertext,
+          secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
+        );
+        contentKey = await _decryptPacked(
+          ciphertext: base64Decode(selectedWrap.wrappedKey),
+          contentKey: sharedSecret,
+          associatedData: utf8.encode(
+            '${envelope.messageId}:${selectedKeyset.deviceId}',
+          ),
+        );
+        clear = await _decryptPacked(
+          ciphertext: base64Decode(envelope.ciphertext),
+          contentKey: contentKey,
+          associatedData: _associatedData(
+            conversation: conversation,
+            messageId: envelope.messageId,
+            senderDeviceId: envelope.senderDeviceId,
+            senderKeysetId: envelope.senderKeysetId!,
+          ),
+        );
+        return PqcDecoded(
+          plaintext: utf8.decode(clear, allowMalformed: false),
+          protocolVersion: PqcV3Wire.protocolVersion,
+        );
+      } finally {
+        secureZero(sharedSecret);
+        secureZero(contentKey);
+        secureZero(clear);
+      }
     } catch (error) {
       return PqcDecodeError(
         PqcDecodeFailure.corrupted,

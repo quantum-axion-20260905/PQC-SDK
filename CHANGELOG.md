@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Hardened Security, Constant-Memory Streaming & Scalable Groups
+
+### Cryptographic Security Hardening
+- Added `PqcRatchetSession` providing continuous ML-KEM exchange and HKDF-SHA256 symmetric chain ratcheting for **Forward Secrecy (FS)** and **Post-Compromise Security (PCS)**.
+- Integrated comprehensive memory zeroization (`secureZero`, `wipeBytes`) across all codec lifecycles (`PqcKemEnvelope`, `PqcAeadBox`, `v3_private_codec`, `v3_attachment_codec`, `v2_private_codec`, `v2_authenticated_group_codec`, `recovery`). Sensitive buffers and ephemeral keys are wiped immediately in `finally` blocks.
+- Added constant-time equality comparisons (`constantTimeBytesEquals`, `constantTimeStringEquals`) to eliminate timing side-channel attacks on MACs, SHA-256 digests, and authorization tokens.
+- Implemented strict **RFC 8785 Canonical JSON (JCS)** serialization (`canonicalJsonEncode`) with lexicographical key sorting for deterministic ML-DSA-65 signatures across heterogeneous platforms.
+- Optimized CSPRNG `randomBytes` to write directly into pre-allocated `Uint8List` buffers.
+
+### Performance & Scalability
+- Introduced `PqcV3ChunkedAttachmentCodec` (`v3_chunked_attachment.dart`): streaming AEAD file encryption in fixed 64 KB memory windows, eliminating Out-Of-Memory (OOM) crashes on large attachments (up to multiple gigabytes).
+- Introduced `PqcGroupSenderKeyEngine` (`pqc_group_sender_key.dart`): scalable $O(1)$ Sender-Key group messaging model. Distributes initial sender keys via ML-KEM once, then sends lightweight constant-size group messages regardless of group size (10 to 10,000+ members).
+- Added sliding-window FIFO eviction (`maxEntries`) to `PqcMemoryReplayStore` to prevent unbounded memory growth and storage bloat.
+
+### Verification
+- Added `test/security_hardening_test.dart` and `test/scalability_and_streaming_test.dart`, bringing the total test suite to 94 passing tests.
+- Static analyzer clean with zero warnings or errors.
 
 - Closed the secure runtime until account initialization and recovery
   synchronization complete, and rejected split health-monitor wiring.

@@ -23,3 +23,7 @@ export 'src/v3_envelope.dart';
 export 'src/v3_group_codec.dart';
 export 'src/v3_private_codec.dart';
 export 'src/version_manager.dart';
+export 'src/crypto_utils.dart';
+export 'src/pqc_ratchet.dart';
+export 'src/v3_chunked_attachment.dart';
+export 'src/pqc_group_sender_key.dart';

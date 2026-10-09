@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'crypto_utils.dart';
 import 'secure_key_vault.dart';
 
 enum PqcReplayDecision { accepted, duplicate, messageIdCollision }
@@ -18,7 +19,14 @@ abstract interface class PqcReplayStore {
 }
 
 class PqcMemoryReplayStore implements PqcReplayStore {
+  PqcMemoryReplayStore({this.maxEntries = 50000});
+
+  final int maxEntries;
   final Map<String, String> _claims = {};
+
+  int get entryCount => _claims.length;
+
+  void clear() => _claims.clear();
 
   @override
   Future<String?> claim({
@@ -29,7 +37,13 @@ class PqcMemoryReplayStore implements PqcReplayStore {
   }) async {
     final key = '$accountBinding|$conversationId|$messageId';
     final existing = _claims[key];
-    if (existing == null) _claims[key] = payloadDigest;
+    if (existing == null) {
+      if (maxEntries > 0 && _claims.length >= maxEntries) {
+        // Evict oldest entry (FIFO sliding window)
+        _claims.remove(_claims.keys.first);
+      }
+      _claims[key] = payloadDigest;
+    }
     return existing;
   }
 }
@@ -194,10 +208,20 @@ class PqcReplayGuard {
         'Replay store returned an invalid digest.',
       );
     }
-    return existing.toLowerCase() == digest
+    return constantTimeStringEquals(existing.toLowerCase(), digest)
         ? PqcReplayDecision.duplicate
         : PqcReplayDecision.messageIdCollision;
   }
 }
 
-bool _isSha256Hex(String value) => RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
+bool _isSha256Hex(String value) {
+  if (value.length != 64) return false;
+  for (var i = 0; i < 64; i++) {
+    final code = value.codeUnitAt(i);
+    final isDigit = code >= 0x30 && code <= 0x39;
+    final isLower = code >= 0x61 && code <= 0x66;
+    final isUpper = code >= 0x41 && code <= 0x46;
+    if (!isDigit && !isLower && !isUpper) return false;
+  }
+  return true;
+}

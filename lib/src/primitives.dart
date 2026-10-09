@@ -20,6 +20,13 @@ class PqcAeadBox {
   final Uint8List nonce;
   final Uint8List ciphertext;
   final Uint8List mac;
+
+  /// Securely overwrites the sensitive cryptographic buffers in place.
+  void zeroize() {
+    secureZero(nonce);
+    secureZero(ciphertext);
+    secureZero(mac);
+  }
 }
 
 class PqcKemEnvelope {
@@ -30,6 +37,11 @@ class PqcKemEnvelope {
 
   final String ciphertextBase64;
   final Uint8List sharedSecret;
+
+  /// Securely overwrites the shared secret bytes in place.
+  void zeroize() {
+    secureZero(sharedSecret);
+  }
 }
 
 abstract interface class PqcPrimitiveSuite {
@@ -237,9 +249,16 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
   }
 
   @override
-  Uint8List randomBytes(int length) => Uint8List.fromList(
-    List<int>.generate(length, (_) => _random.nextInt(256)),
-  );
+  Uint8List randomBytes(int length) {
+    if (length < 0) {
+      throw ArgumentError.value(length, 'length', 'Must be non-negative.');
+    }
+    final bytes = Uint8List(length);
+    for (var i = 0; i < length; i++) {
+      bytes[i] = _random.nextInt(256);
+    }
+    return bytes;
+  }
 
   @override
   Uint8List sha256(List<int> value) =>

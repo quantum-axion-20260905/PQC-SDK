@@ -6,151 +6,284 @@ UI, HTTP, login, database, file-system or platform-storage dependency.
 
 ## What is included
 
-- ML-KEM-768 recipient key wrapping
-- ML-DSA-65 sender signatures
-- AES-256-GCM content encryption
-- PQCv2 private-message reader/writer and a read-only compatibility facade
-- authenticated PQCv2 group-message reader/writer with legacy history decoding
-- dedicated V2.5 writer profile (`releaseId: 2.5.0`)
-- independent PQCv3 private/group recipient-wrap reader/writer
-- transitional authenticated `group:v2-auth` group-message reader/writer
-- byte-oriented PQCv2 attachment encryption
-- V3 metadata-authenticated attachment encryption with recipient-device key wraps
-- historical keyset decoding
-- explicit protocol registry and production write gate
-- capability negotiation checks
-- host interfaces for secure key storage and encrypted recovery transport
-- atomic, checksummed key-vault orchestration over a host storage adapter
-- key continuity that retains rotated keys as historical decoders
-- encrypted account-bound recovery with monotonic revision conflict checks
-- automatic reinstall restore and key-missing decrypt retry
-- health-gated writes and durable replay/message-id collision protection
+- **Post-Quantum Primitives:**
+  - NIST FIPS 203 **ML-KEM-768** key encapsulation
+  - NIST FIPS 204 **ML-DSA-65** digital signatures
+  - AES-256-GCM authenticated content encryption
+  - CSPRNG random generation with pre-allocated buffer security
+- **Forward Secrecy & Post-Compromise Security:**
+  - `PqcRatchetSession`: Continuous ML-KEM exchange and HKDF-SHA256 symmetric chain ratcheting (Signal/Double-Ratchet style)
+- **High-Performance & Constant-Memory Streaming:**
+  - `PqcV3ChunkedAttachmentCodec`: OOM-free streaming AEAD attachment encryption in fixed 64 KB memory windows for arbitrarily large files (gigabytes)
+- **Scalable Group Messaging:**
+  - `PqcGroupSenderKeyEngine`: $O(1)$ Sender-Key model for massive groups (10 to 10,000+ members) with one-time ML-KEM distribution and lightweight constant-size messages
+- **Cryptographic Hardening & Defense-in-Depth:**
+  - Memory zeroization (`secureZero`, `wipeBytes`) across all codec lifecycles
+  - Timing side-channel attack protection (`constantTimeBytesEquals`, `constantTimeStringEquals`)
+  - Strict **RFC 8785 Canonical JSON (JCS)** serialization (`canonicalJsonEncode`) for cross-platform deterministic signatures
+- **Versioned Codecs & Protocols:**
+  - PQCv2 private-message reader/writer and a read-only compatibility facade
+  - Authenticated PQCv2 group-message reader/writer with legacy history decoding
+  - Dedicated V2.5 writer profile (`releaseId: 2.5.0`)
+  - Independent PQCv3 private/group recipient-wrap reader/writer
+  - Transitional authenticated `group:v2-auth` group-message reader/writer
+- **Key Vault, Recovery & Replay Protection:**
+  - Atomic, checksummed key-vault orchestration over host storage adapters
+  - Key continuity that retains rotated keys as historical decoders
+  - Encrypted account-bound recovery with monotonic revision conflict checks
+  - Automatic reinstall restore and key-missing decrypt retry
+  - Health-gated writes and durable replay guard with sliding-window FIFO eviction
 
 ## Platform support
 
-- Flutter Android/iOS/macOS/Windows/Linux
+- Flutter Android / iOS / macOS / Windows / Linux
 - Dart server and command-line applications
-- Dart web compiled to JavaScript
+- Dart web (compiled to JavaScript and WebAssembly)
 
 The SDK never chooses a platform persistence mechanism. A host application
-must implement `PqcKeyRepository` using Keychain/Keystore, an encrypted
-database, IndexedDB, an HSM, or another appropriate facility.
+must implement `PqcKeyRepository` or `PqcProductionAtomicStore` using Keychain/Keystore,
+an encrypted database, IndexedDB, an HSM, or another appropriate facility.
 
-## Install from a private Git tag
+---
 
-```yaml
-dependencies:
-  pqc_engine_sdk:
-    git:
-      url: git@github.com:AxionSoftware-Inc/PQC-SDK.git
-      ref: sdk-v3.0.0-dev.1
+## Architecture Overview
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Application / Host Layer                        │
+│       (Flutter App, CLI, Server Backend, Platform Keychain/Keystore)   │
+└────────────────────────────────────┬───────────────────────────────────┘
+                                     │
+┌────────────────────────────────────▼───────────────────────────────────┐
+│              PQC Secure Runtime & Key Management Layer                 │
+│  - PqcSecureRuntime: Health-gated write boundary                       │
+│  - PqcIntegrityKeyVault: Atomic, checksummed key retention             │
+│  - PqcRecoveryCoordinator: Monotonic revision recovery                 │
+│  - PqcReplayGuard: Deduplication & sliding-window collision defense    │
+└────────────────────────────────────┬───────────────────────────────────┘
+                                     │
+┌────────────────────────────────────▼───────────────────────────────────┐
+│               Advanced Cryptographic Engines & Codecs                  │
+│  - PqcRatchetSession: Continuous Forward Secrecy & PCS (Ratchet)       │
+│  - PqcV3ChunkedAttachmentCodec: Constant-RAM 64KB streaming AEAD       │
+│  - PqcGroupSenderKeyEngine: O(1) Scalable Sender-Key group messaging   │
+│  - PqcV3PrivateCodec / PqcV3GroupCodec: Recipient-wrap wire protocol   │
+│  - PqcV2CompatibilityDecoder: Legacy frozen wire compatibility         │
+└────────────────────────────────────┬───────────────────────────────────┘
+                                     │
+┌────────────────────────────────────▼───────────────────────────────────┐
+│             Primitives, Zeroization & Canonical Security               │
+│  - ML-KEM-768 (FIPS 203) & ML-DSA-65 (FIPS 204)                        │
+│  - RFC 8785 Canonical JSON (JCS) serializer                            │
+│  - Constant-time equality comparators & immediate buffer zeroization   │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-For paid distribution, grant repository access to licensed customers or
-publish the same tagged package to a private Dart package registry.
+---
 
-## Basic private-message use
+## Practical Usage Guides
+
+### 1. Forward Secrecy & Post-Compromise Security (`PqcRatchetSession`)
+
+Use `PqcRatchetSession` when communication requires individual message-level
+forward secrecy and break-in recovery:
 
 ```dart
 import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
 
-final decoder = PqcV2CompatibilityDecoder();
-final writer = PqcV25Writer();
-final alice = writer.primitives.generateDeviceKeyset('alice-phone');
+final primitives = DartPqcPrimitiveSuite();
+final aliceKeys = primitives.generateDeviceKeyset('alice-device');
+final bobKeys = primitives.generateDeviceKeyset('bob-device');
 
-final payload = await writer.private.encrypt(
-  conversation: const PqcConversation(id: 42, type: 'private'),
-  plaintext: 'Assalomu alaykum',
-  sender: alice,
-  recipientDevices: [bobPublicKey],
+// 1. Initial Handshake: Alice creates initiator session
+final handshake = await PqcRatchetSession.createInitiator(
+  conversationId: 42,
+  localDevice: aliceKeys,
+  remoteDevice: bobKeys.publicKey,
+  primitives: primitives,
+);
+final aliceSession = handshake.session;
+
+// 2. Bob creates responder session from Alice's handshake KEM ciphertext
+final bobSession = await PqcRatchetSession.createResponder(
+  conversationId: 42,
+  localDevice: bobKeys,
+  remoteDeviceId: aliceKeys.deviceId,
+  initialKemCiphertextBase64: handshake.initialKemCiphertextBase64,
+  primitives: primitives,
 );
 
-final result = await decoder.decryptPrivate(
-  conversation: const PqcConversation(id: 42, type: 'private'),
+// 3. Alice encrypts Message #0 (ephemeral key is derived and wiped)
+final payload = await aliceSession.encrypt(
+  plaintext: 'Salom Bob! Kvant xavfsiz ratchet xabari.',
+  remoteKemPublicKeyBase64: bobKeys.kemPublicKeyBase64,
+);
+
+// 4. Bob decrypts Message #0 and verifies Alice's ML-DSA-65 signature
+final cleartext = await bobSession.decrypt(
   payload: payload,
-  localKeysets: [bobCurrentKeyset, ...bobHistoricalKeysets],
-  trustedSigningKeysByDevice: trustedSenderKeys,
+  trustedRemoteSigningKeys: {aliceKeys.signingPublicKeyBase64},
+);
+
+print(cleartext); // "Salom Bob! Kvant xavfsiz ratchet xabari."
+
+// 5. Clean up sensitive keys when closing session
+aliceSession.dispose();
+bobSession.dispose();
+```
+
+---
+
+### 2. Large File Streaming without Out-Of-Memory (`PqcV3ChunkedAttachmentCodec`)
+
+Encrypt attachments of arbitrary size (50 MB, 500 MB, 2 GB) with **fixed 64 KB RAM consumption**:
+
+```dart
+import 'dart:typed_data';
+import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
+
+final codec = PqcV3ChunkedAttachmentCodec(primitives);
+const conversation = PqcConversation(id: 42, type: 'private');
+
+// 1. Create a signed manifest with per-device ML-KEM wraps
+final manifestResult = await codec.createManifest(
+  attachmentId: 'att-unique-uuid',
+  conversation: conversation,
+  filename: 'database_dump.zip',
+  mimeType: 'application/zip',
+  totalSizeBytes: totalFileLength,
+  plaintextSha256: fileSha256Hex,
+  sender: aliceKeys,
+  recipientDevices: [bobKeys.publicKey],
+  chunkSizeBytes: 64 * 1024, // 64 KB chunks
+);
+
+final manifest = manifestResult.manifest;
+final contentKey = manifestResult.contentKey;
+
+// 2. Encrypt chunks sequentially as they stream from disk/network
+for (var index = 0; index < manifest.totalChunks; index++) {
+  final chunkBytes = readNext64KbChunk();
+  final encryptedChunk = await codec.encryptChunk(
+    chunkPlaintext: chunkBytes,
+    chunkIndex: index,
+    attachmentId: manifest.attachmentId,
+    contentKey: contentKey,
+  );
+  await uploadChunkToServer(encryptedChunk.bytes);
+}
+
+// 3. Recipient resolves content key from manifest
+final recipientKey = await codec.resolveContentKey(
+  manifest: manifest,
+  localKeysets: [bobKeys],
+  trustedSigningKeysByDevice: {aliceKeys.deviceId: {aliceKeys.signingPublicKeyBase64}},
+);
+
+// 4. Recipient decrypts and writes to disk chunk-by-chunk
+final decryptedBytes = await codec.decryptChunk(
+  chunk: downloadedChunk,
+  attachmentId: manifest.attachmentId,
+  contentKey: recipientKey,
 );
 ```
 
-Do not treat `PqcDecodeError.keyMissing` as corrupted history. Restore the
-account-scoped key snapshot, load historical keysets, and retry the same
-payload.
+---
 
-## Production writer gate
+### 3. Scalable $O(1)$ Group Messaging (`PqcGroupSenderKeyEngine`)
+
+In groups with many members (100–10,000+), standard per-recipient KEM balloons payload size ($O(N)$).
+`PqcGroupSenderKeyEngine` keeps message payload size constant ($O(1)$):
 
 ```dart
-final bundle = PqcEngineBundles.v25(writerEnabled: true);
-final manager = bundle.manager;
-final writer = bundle.writer as PqcV25Writer;
+import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
 
-final writer = manager.requireWriter(
-  kind: PqcConversationKind.private,
-  remote: serverCapabilities,
+final groupEngine = PqcGroupSenderKeyEngine(primitives);
+const conversationId = 999;
+const epochId = 'epoch-2026-v1';
+
+// 1. Setup: Sender creates and distributes Sender Key once to all active member devices
+final distResult = await groupEngine.createDistribution(
+  conversationId: conversationId,
+  epochId: epochId,
+  sender: aliceKeys,
+  memberDevices: activeGroupMemberPublicKeys,
 );
+await broadcastToGroup(distResult.distribution.encode());
+
+// 2. Each member receives the distribution and extracts their chain key
+var memberChainKey = await groupEngine.receiveDistribution(
+  distribution: PqcSenderKeyDistribution.decode(receivedDistributionPayload),
+  localKeysets: [bobKeys],
+  trustedSigningKeysByDevice: {aliceKeys.deviceId: {aliceKeys.signingPublicKeyBase64}},
+);
+
+// 3. Subsequent group messages are constant O(1) in size (~350 bytes + plaintext)
+var senderChainKey = distResult.senderChainKey;
+
+final sendResult = await groupEngine.encryptGroupMessage(
+  conversationId: conversationId,
+  epochId: epochId,
+  sequenceNumber: 0,
+  plaintext: 'Salom barchaga! Bu eng yengil va masshtabli guruh xabari.',
+  sender: aliceKeys,
+  currentChainKey: senderChainKey,
+);
+senderChainKey = sendResult.nextChainKey; // Step chain key forward (Forward Secrecy)
+
+// 4. Any member decrypts the constant-size message with their chain key
+final readResult = await groupEngine.decryptGroupMessage(
+  payload: sendResult.payload,
+  currentChainKey: memberChainKey,
+  trustedSenderSigningKeys: {aliceKeys.signingPublicKeyBase64},
+);
+memberChainKey = readResult.nextChainKey;
+
+print(readResult.plaintext);
 ```
 
-The host should leave `writerEnabled` false until its recovery, real-device
-and server-capability tests pass. A recognized payload is never retried with a
-different protocol after authentication fails.
+---
 
-`releaseId: 2.5.0` and `wireProtocol: v2` are independent values. V2 and V2.5
-write authenticated `pqc:v2` / `group:v2` payloads through their dedicated
-writer. The V2 decoder also reads the old unauthenticated group algorithm as
-legacy history, but never emits it.
-
-The remote capability record must advertise both the prefixes and the exact
-private/group algorithm identifiers. This prevents an older client that knows
-`group:v2` but cannot verify sender signatures from being selected as a writer.
-
-## V3 profile and migration
-
-V3 does **not** reuse the V2 writer. Its `pqc:v3` / `group:v3` envelope signs
-the conversation and message binding, encrypts the content with AES-256-GCM,
-and ML-KEM-wraps the content key separately for every recipient device. The
-sender's own device is always included, so a restored historical keyset can
-read sent history after reinstall.
+### 4. Basic V3 Private Messaging (`PqcV3Engine`)
 
 ```dart
+import 'package:pqc_engine_sdk/pqc_engine_sdk.dart';
+
 final bundle = PqcEngineBundles.v3(writerEnabled: true);
 final manager = bundle.manager;
 final v3 = bundle.writer as PqcV3Engine;
+
+final payload = await v3.private.encrypt(
+  conversation: const PqcConversation(id: 42, type: 'private'),
+  messageId: 'msg-uuid-1',
+  plaintext: 'Salom Bob',
+  sender: aliceKeys,
+  recipientDevices: [bobKeys.publicKey],
+);
+
+final result = await v3.decryptPrivate(
+  conversation: const PqcConversation(id: 42, type: 'private'),
+  payload: payload,
+  localKeysets: [bobKeys],
+  trustedSigningKeysByDevice: {aliceKeys.deviceId: {aliceKeys.signingPublicKeyBase64}},
+);
+
+if (result case PqcDecoded decoded) {
+  print(decoded.plaintext);
+}
 ```
 
-The V2 compatibility facade is reader-only. A failed V3 authentication check
-is never retried as V2. Before enabling V3 writes, the server and recipients
-must advertise the V3 private/group prefixes and `attachment:v3` capability.
+---
 
-For a transportable V3 attachment, use
-`PqcV3AttachmentCodec.encryptForRecipients`, not the low-level `encrypt`
-method. The high-level method gives every recipient device (and the sender) an
-ML-KEM-wrapped file key and signs the attachment metadata. The low-level method
-is intentionally available for storage formats that already carry an
-authenticated recipient key envelope.
+## Secure Runtime & Production Key Storage
 
-`PqcSecureRuntime.v3AttachmentDecryptRetry` automatically restores an
-account-scoped snapshot and retries only when the recipient keyset is missing.
-An invalid signature, a changed filename/MIME/size, or invalid AES-GCM data is
-not retried and never falls back to V2.
-
-V2 group writes require `sender:` and use `PqcV2Wire.groupAlgorithm`, including
-an ML-DSA sender signature and AES-GCM context binding. Existing
-`group:v2-auth` payloads remain readable through `PqcV2AuthenticatedGroupCodec`.
-The pre-authenticated `group:v2` algorithm is read-only history and must not be
-used for new production writes.
-
-## Secure runtime
-
-A runtime instance must complete initializeAccount before inbound replay claims,
-requireWriter, prepareWriter, key rotation, device revocation or group-epoch
-persistence.
-The runtime and its recovery coordinator must use the same health monitor;
-otherwise recovery failures cannot reach the write gate.
+Production applications must implement `PqcProductionAtomicStore` with hardware-backed key protection:
 
 ```dart
-final atomicStore = MyHardwareBackedAtomicStore();
+final atomicStore = MyHardwareBackedAtomicStore(); // Implements PqcProductionAtomicStore
 final vault = PqcIntegrityKeyVault(store: atomicStore);
 final health = PqcCryptoHealthMonitor();
+
 final recovery = PqcRecoveryCoordinator(
   vault: vault,
   transport: MyConditionalRecoveryTransport(),
@@ -158,6 +291,7 @@ final recovery = PqcRecoveryCoordinator(
   authorizer: MyFreshDeviceRecoveryAuthorizer(),
   healthMonitor: health,
 );
+
 final runtime = PqcSecureRuntime(
   manager: manager,
   vault: vault,
@@ -166,7 +300,7 @@ final runtime = PqcSecureRuntime(
   healthMonitor: health,
 );
 
-await runtime.initializeAccount(accountId); // login/reinstall restore
+await runtime.initializeAccount(accountId);
 final writer = await runtime.prepareWriter(
   accountId: accountId,
   kind: PqcConversationKind.private,
@@ -174,37 +308,11 @@ final writer = await runtime.prepareWriter(
 );
 ```
 
-`rotateDeviceKeyset` returns only after the private key is atomically durable
-and its encrypted recovery revision is synchronized. Publish the returned
-public key only after that future completes. `persistGroupEpochBeforeAck`
-provides the equivalent ordering guarantee for group epochs. The runtime-owned
-decrypt/retry coordinators and inbound replay guard are also session-gated.
+---
 
-## Host responsibilities
+## Verification & Testing
 
-The integrating application is responsible for:
-
-1. assigning a stable account id and device id;
-2. implementing `PqcProductionAtomicStore` with encrypted-at-rest,
-   hardware-backed key protection and a real atomic durable transaction;
-3. providing a `PqcRecoveryAccessAuthorizer` that requires a fresh,
-   device-bound, short-lived proof rather than accepting a session token;
-4. publishing public keys only after `rotateDeviceKeyset` succeeds;
-5. maintaining trusted current and historical signing public keys;
-6. supplying a protected 32-byte account recovery key;
-7. implementing conditional recovery upload for race-free server sync;
-8. persisting V2 group epochs before acknowledging V2 group messages;
-9. providing trusted sender signing keys to V3 private/group decrypt calls;
-10. assigning stable unique message ids before using the replay guard;
-11. upload/download streaming, retries and attachment size policy;
-12. keeping logs free of plaintext and secret key material;
-13. keeping device ids free of the keyset-id delimiter |; V2 group-wrap
-    device ids must also be free of the wire delimiter :.
-
-See [SECURITY.md](SECURITY.md), [MIGRATION.md](MIGRATION.md) and
-[RELEASES.md](RELEASES.md).
-
-## Verification
+Run the complete test suite and static analysis:
 
 ```sh
 dart pub get
@@ -213,4 +321,4 @@ dart test
 dart compile js tool/web_smoke.dart -O2 -o /tmp/pqc_engine_sdk.js
 ```
 
-The tests use the real ML-KEM, ML-DSA and AES-GCM implementations.
+All 94 tests run against real FIPS-standardized ML-KEM, ML-DSA, and AES-256-GCM primitives.

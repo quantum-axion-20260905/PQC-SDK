@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'crypto_utils.dart';
 import 'models.dart';
 import 'primitives.dart';
 
@@ -40,33 +41,44 @@ class PqcV2PrivateCodec {
     }
 
     final contentKey = _primitives.randomBytes(32);
-    final contentBox = await _primitives.encryptAead(
-      plaintext: utf8.encode(plaintext),
-      key: contentKey,
-      nonce: _primitives.randomBytes(12),
-    );
+    late final PqcAeadBox contentBox;
     final wraps = <Map<String, String>>[];
-    for (final device in recipients.values) {
-      final kem = _primitives.encapsulate(device.kemPublicKeyBase64);
-      final wrapKey = await _deriveWrapKey(
-        sharedSecret: kem.sharedSecret,
-        conversation: conversation,
-        senderDeviceId: sender.deviceId,
-        targetDeviceId: device.deviceId,
-      );
-      final wrapBox = await _primitives.encryptAead(
-        plaintext: contentKey,
-        key: wrapKey,
+    try {
+      contentBox = await _primitives.encryptAead(
+        plaintext: utf8.encode(plaintext),
+        key: contentKey,
         nonce: _primitives.randomBytes(12),
       );
-      wraps.add({
-        'target_device_id': device.deviceId,
-        'target_keyset_id': device.keysetId,
-        'kem_ciphertext': kem.ciphertextBase64,
-        'nonce': base64Encode(wrapBox.nonce),
-        'ciphertext': base64Encode(wrapBox.ciphertext),
-        'mac': base64Encode(wrapBox.mac),
-      });
+      for (final device in recipients.values) {
+        final kem = _primitives.encapsulate(device.kemPublicKeyBase64);
+        Uint8List? wrapKey;
+        try {
+          wrapKey = await _deriveWrapKey(
+            sharedSecret: kem.sharedSecret,
+            conversation: conversation,
+            senderDeviceId: sender.deviceId,
+            targetDeviceId: device.deviceId,
+          );
+          final wrapBox = await _primitives.encryptAead(
+            plaintext: contentKey,
+            key: wrapKey,
+            nonce: _primitives.randomBytes(12),
+          );
+          wraps.add({
+            'target_device_id': device.deviceId,
+            'target_keyset_id': device.keysetId,
+            'kem_ciphertext': kem.ciphertextBase64,
+            'nonce': base64Encode(wrapBox.nonce),
+            'ciphertext': base64Encode(wrapBox.ciphertext),
+            'mac': base64Encode(wrapBox.mac),
+          });
+        } finally {
+          kem.zeroize();
+          secureZero(wrapKey);
+        }
+      }
+    } finally {
+      secureZero(contentKey);
     }
 
     final unsigned = <String, dynamic>{
@@ -164,36 +176,47 @@ class PqcV2PrivateCodec {
         return const PqcDecodeError(PqcDecodeFailure.keyMissing);
       }
 
-      final sharedSecret = _primitives.decapsulate(
-        ciphertextBase64: selectedWrap['kem_ciphertext'] ?? '',
-        secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
-      );
-      final wrapKey = await _deriveWrapKey(
-        sharedSecret: sharedSecret,
-        conversation: conversation,
-        senderDeviceId: senderDeviceId,
-        targetDeviceId: selectedKeyset.deviceId,
-      );
-      final contentKey = await _primitives.decryptAead(
-        box: PqcAeadBox(
-          nonce: base64Decode(selectedWrap['nonce'] ?? ''),
-          ciphertext: base64Decode(selectedWrap['ciphertext'] ?? ''),
-          mac: base64Decode(selectedWrap['mac'] ?? ''),
-        ),
-        key: wrapKey,
-      );
-      final clear = await _primitives.decryptAead(
-        box: PqcAeadBox(
-          nonce: base64Decode(document['content_nonce'] as String),
-          ciphertext: base64Decode(document['content_ciphertext'] as String),
-          mac: base64Decode(document['content_mac'] as String),
-        ),
-        key: contentKey,
-      );
-      return PqcDecoded(
-        plaintext: utf8.decode(clear, allowMalformed: false),
-        protocolVersion: PqcV2Wire.protocolVersion,
-      );
+      Uint8List? sharedSecret;
+      Uint8List? wrapKey;
+      Uint8List? contentKey;
+      Uint8List? clear;
+      try {
+        sharedSecret = _primitives.decapsulate(
+          ciphertextBase64: selectedWrap['kem_ciphertext'] ?? '',
+          secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
+        );
+        wrapKey = await _deriveWrapKey(
+          sharedSecret: sharedSecret,
+          conversation: conversation,
+          senderDeviceId: senderDeviceId,
+          targetDeviceId: selectedKeyset.deviceId,
+        );
+        contentKey = await _primitives.decryptAead(
+          box: PqcAeadBox(
+            nonce: base64Decode(selectedWrap['nonce'] ?? ''),
+            ciphertext: base64Decode(selectedWrap['ciphertext'] ?? ''),
+            mac: base64Decode(selectedWrap['mac'] ?? ''),
+          ),
+          key: wrapKey,
+        );
+        clear = await _primitives.decryptAead(
+          box: PqcAeadBox(
+            nonce: base64Decode(document['content_nonce'] as String),
+            ciphertext: base64Decode(document['content_ciphertext'] as String),
+            mac: base64Decode(document['content_mac'] as String),
+          ),
+          key: contentKey,
+        );
+        return PqcDecoded(
+          plaintext: utf8.decode(clear, allowMalformed: false),
+          protocolVersion: PqcV2Wire.protocolVersion,
+        );
+      } finally {
+        secureZero(sharedSecret);
+        secureZero(wrapKey);
+        secureZero(contentKey);
+        secureZero(clear);
+      }
     } catch (error) {
       return PqcDecodeError(
         PqcDecodeFailure.corrupted,

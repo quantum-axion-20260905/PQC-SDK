@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'crypto_utils.dart';
 import 'health_monitor.dart';
 import 'key_repository.dart';
 import 'models.dart';
@@ -211,18 +212,22 @@ class PqcRecoveryEnvelopeCodec {
           revision: revision,
         ),
       );
-      final snapshotJson = jsonDecode(
-        utf8.decode(clear, allowMalformed: false),
-      );
-      if (snapshotJson is! Map) throw const FormatException();
-      final snapshot = PqcKeyVaultSnapshot.fromJson(
-        Map<String, dynamic>.from(snapshotJson),
-      );
-      if (snapshot.revision != revision ||
-          snapshot.accountBinding != accountBinding) {
-        throw const FormatException();
+      try {
+        final snapshotJson = jsonDecode(
+          utf8.decode(clear, allowMalformed: false),
+        );
+        if (snapshotJson is! Map) throw const FormatException();
+        final snapshot = PqcKeyVaultSnapshot.fromJson(
+          Map<String, dynamic>.from(snapshotJson),
+        );
+        if (snapshot.revision != revision ||
+            snapshot.accountBinding != accountBinding) {
+          throw const FormatException();
+        }
+        return snapshot;
+      } finally {
+        secureZero(clear);
       }
-      return snapshot;
     } on PqcRecoveryException {
       rethrow;
     } catch (_) {
@@ -521,13 +526,5 @@ bool _sameSnapshotMaterial(
 
 String _sha256Hex(List<int> bytes) => crypto.sha256.convert(bytes).toString();
 
-bool _constantTimeEquals(String left, String right) {
-  final leftBytes = utf8.encode(left);
-  final rightBytes = utf8.encode(right);
-  if (leftBytes.length != rightBytes.length) return false;
-  var difference = 0;
-  for (var index = 0; index < leftBytes.length; index++) {
-    difference |= leftBytes[index] ^ rightBytes[index];
-  }
-  return difference == 0;
-}
+bool _constantTimeEquals(String left, String right) =>
+    constantTimeStringEquals(left, right);

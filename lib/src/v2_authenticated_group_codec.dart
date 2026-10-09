@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'crypto_utils.dart';
 import 'models.dart';
 import 'primitives.dart';
 
@@ -155,10 +156,14 @@ class PqcV2AuthenticatedGroupCodec {
           signingPublicKey: signingPublicKey,
         ),
       );
-      return PqcDecoded(
-        plaintext: utf8.decode(clear, allowMalformed: false),
-        protocolVersion: PqcV2Wire.protocolVersion,
-      );
+      try {
+        return PqcDecoded(
+          plaintext: utf8.decode(clear, allowMalformed: false),
+          protocolVersion: PqcV2Wire.protocolVersion,
+        );
+      } finally {
+        secureZero(clear);
+      }
     } catch (error) {
       return PqcDecodeError(
         PqcDecodeFailure.corrupted,

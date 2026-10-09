@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'crypto_utils.dart';
 import 'models.dart';
 import 'primitives.dart';
 import 'v3_envelope.dart';
@@ -242,33 +243,42 @@ class PqcV3AttachmentCodec {
     }
     final recipients = _uniqueRecipients(recipientDevices, sender.publicKey);
     final contentKey = generateContentKey();
-    final attachment = await encrypt(
-      bytes: bytes,
-      filename: filename,
-      mimeType: mimeType,
-      contentKey: contentKey,
-    );
+    late final PqcV3EncryptedAttachment attachment;
     final wraps = <PqcV3RecipientWrap>[];
-    for (final recipient in recipients) {
-      final kem = _primitives.encapsulate(recipient.kemPublicKeyBase64);
-      final box = await _primitives.encryptAead(
-        plaintext: contentKey,
-        key: kem.sharedSecret,
-        nonce: _primitives.randomBytes(12),
-        associatedData: utf8.encode('$attachmentId:${recipient.deviceId}'),
+    try {
+      attachment = await encrypt(
+        bytes: bytes,
+        filename: filename,
+        mimeType: mimeType,
+        contentKey: contentKey,
       );
-      wraps.add(
-        PqcV3RecipientWrap(
-          deviceId: recipient.deviceId,
-          keysetId: recipient.keysetId,
-          kemCiphertext: kem.ciphertextBase64,
-          wrappedKey: base64Encode([
-            ...box.nonce,
-            ...box.ciphertext,
-            ...box.mac,
-          ]),
-        ),
-      );
+      for (final recipient in recipients) {
+        final kem = _primitives.encapsulate(recipient.kemPublicKeyBase64);
+        try {
+          final box = await _primitives.encryptAead(
+            plaintext: contentKey,
+            key: kem.sharedSecret,
+            nonce: _primitives.randomBytes(12),
+            associatedData: utf8.encode('$attachmentId:${recipient.deviceId}'),
+          );
+          wraps.add(
+            PqcV3RecipientWrap(
+              deviceId: recipient.deviceId,
+              keysetId: recipient.keysetId,
+              kemCiphertext: kem.ciphertextBase64,
+              wrappedKey: base64Encode([
+                ...box.nonce,
+                ...box.ciphertext,
+                ...box.mac,
+              ]),
+            ),
+          );
+        } finally {
+          kem.zeroize();
+        }
+      }
+    } finally {
+      secureZero(contentKey);
     }
     final unsigned = PqcV3AttachmentEnvelope(
       attachmentId: attachmentId,
@@ -360,30 +370,37 @@ class PqcV3AttachmentCodec {
     if (packedWrap.length < 28) {
       throw const FormatException('V3 attachment key wrap is too short.');
     }
-    final sharedSecret = _primitives.decapsulate(
-      ciphertextBase64: selectedWrap.kemCiphertext,
-      secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
-    );
-    final contentKey = await _primitives.decryptAead(
-      box: PqcAeadBox(
-        nonce: packedWrap.sublist(0, 12),
-        ciphertext: packedWrap.sublist(12, packedWrap.length - 16),
-        mac: packedWrap.sublist(packedWrap.length - 16),
-      ),
-      key: sharedSecret,
-      associatedData: utf8.encode(
-        '${envelope.attachmentId}:${selectedKeyset.deviceId}',
-      ),
-    );
-    final bytes = await decrypt(
-      attachment: envelope.attachment,
-      contentKey: contentKey,
-    );
-    return PqcV3DecryptedAttachment(
-      bytes: bytes,
-      filename: envelope.attachment.filename,
-      mimeType: envelope.attachment.mimeType,
-    );
+    Uint8List? sharedSecret;
+    Uint8List? contentKey;
+    try {
+      sharedSecret = _primitives.decapsulate(
+        ciphertextBase64: selectedWrap.kemCiphertext,
+        secretKeyBase64: selectedKeyset.kemSecretKeyBase64,
+      );
+      contentKey = await _primitives.decryptAead(
+        box: PqcAeadBox(
+          nonce: packedWrap.sublist(0, 12),
+          ciphertext: packedWrap.sublist(12, packedWrap.length - 16),
+          mac: packedWrap.sublist(packedWrap.length - 16),
+        ),
+        key: sharedSecret,
+        associatedData: utf8.encode(
+          '${envelope.attachmentId}:${selectedKeyset.deviceId}',
+        ),
+      );
+      final bytes = await decrypt(
+        attachment: envelope.attachment,
+        contentKey: contentKey,
+      );
+      return PqcV3DecryptedAttachment(
+        bytes: bytes,
+        filename: envelope.attachment.filename,
+        mimeType: envelope.attachment.mimeType,
+      );
+    } finally {
+      secureZero(sharedSecret);
+      secureZero(contentKey);
+    }
   }
 
   List<int> _associatedData(String filename, String mimeType, int sizeBytes) =>
