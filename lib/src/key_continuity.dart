@@ -14,7 +14,7 @@ class PqcKeyContinuityGuard {
     required bool makeCurrent,
   }) {
     final keysets = <PqcDeviceKeyset>[
-      ?current.currentDeviceKeyset,
+      if (current.currentDeviceKeyset != null) current.currentDeviceKeyset!,
       ...current.historicalDeviceKeysets,
     ];
     for (final existing in keysets) {

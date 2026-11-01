@@ -67,7 +67,7 @@ class PqcDecryptRetryCoordinator {
       return decoder.decryptPrivate(
         conversation: conversation,
         payload: payload,
-        localKeysets: [?current, ...historical],
+        localKeysets: [if (current != null) current, ...historical],
         trustedSigningKeysByDevice: trustedSigningKeysByDevice,
       );
     }
@@ -135,7 +135,7 @@ class PqcDecryptRetryCoordinator {
         conversation: conversation,
         payload: payload,
         epochsById: epochs,
-        localKeysets: [?current, ...historical],
+        localKeysets: [if (current != null) current, ...historical],
         trustedSigningKeysByDevice: trustedSigningKeysByDevice,
       );
     }
@@ -186,7 +186,7 @@ class PqcV3AttachmentDecryptRetryCoordinator {
       return codec.decryptForRecipient(
         conversation: conversation,
         payload: payload,
-        localKeysets: [?current, ...historical],
+        localKeysets: [if (current != null) current, ...historical],
         trustedSigningKeysByDevice: trustedSigningKeysByDevice,
       );
     }
@@ -591,7 +591,7 @@ class PqcSecureRuntime {
     final codec = PqcV3ChunkedAttachmentCodec(primitives ?? DartPqcPrimitiveSuite());
     return codec.resolveContentKey(
       manifest: manifest,
-      localKeysets: [?current, ...historical],
+      localKeysets: [if (current != null) current, ...historical],
       trustedSigningKeysByDevice: trustedSigningKeysByDevice,
     );
   }
@@ -638,7 +638,7 @@ class PqcSecureRuntime {
     final engine = PqcGroupSenderKeyEngine(primitives ?? DartPqcPrimitiveSuite());
     return engine.receiveDistribution(
       distribution: distribution,
-      localKeysets: [?current, ...historical],
+      localKeysets: [if (current != null) current, ...historical],
       trustedSigningKeysByDevice: trustedSigningKeysByDevice,
     );
   }
