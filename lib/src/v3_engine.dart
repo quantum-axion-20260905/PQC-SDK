@@ -94,4 +94,60 @@ class PqcV3Engine implements PqcEngine {
     localKeysets: localKeysets,
     trustedSigningKeysByDevice: trustedSigningKeysByDevice,
   );
+
+  Future<String> encodePrivate({
+    required PqcConversation conversation,
+    required String plaintext,
+    required PqcDeviceKeyset sender,
+    required Iterable<PqcDevicePublicKey> recipientDevices,
+    String messageId = '',
+  }) => private.encrypt(
+    conversation: conversation,
+    messageId: messageId.isNotEmpty ? messageId : 'msg-${DateTime.now().microsecondsSinceEpoch}',
+    plaintext: plaintext,
+    sender: sender,
+    recipientDevices: recipientDevices,
+  );
+
+  Future<String> encodeGroup({
+    required PqcConversation conversation,
+    required String plaintext,
+    required PqcGroupEpoch epoch,
+    PqcDeviceKeyset? sender,
+    Iterable<PqcDevicePublicKey> recipientDevices = const [],
+    String messageId = '',
+  }) => group.encrypt(
+    conversation: conversation,
+    messageId: messageId.isNotEmpty ? messageId : epoch.epochId,
+    plaintext: plaintext,
+    sender: sender!,
+    memberDevices: recipientDevices,
+  );
+
+  Future<PqcDecodeResult> decodePrivate({
+    required PqcConversation conversation,
+    required String payload,
+    required Iterable<PqcDeviceKeyset> localKeysets,
+    required Map<String, Set<String>> trustedSigningKeysByDevice,
+  }) => decryptPrivate(
+    conversation: conversation,
+    payload: payload,
+    localKeysets: localKeysets,
+    trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+  );
+
+  Future<PqcDecodeResult> decodeGroup({
+    required PqcConversation conversation,
+    required String payload,
+    required Map<String, PqcGroupEpoch> epochsById,
+    Iterable<PqcDeviceKeyset> localKeysets = const [],
+    Map<String, Set<String>> trustedSigningKeysByDevice = const {},
+    bool requireAuthenticatedSender = false,
+  }) => decryptGroup(
+    conversation: conversation,
+    payload: payload,
+    epochsById: epochsById,
+    localKeysets: localKeysets,
+    trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+  );
 }

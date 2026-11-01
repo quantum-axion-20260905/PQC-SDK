@@ -81,7 +81,7 @@ class PqcV3MessageCodec {
           conversation: conversation,
           messageId: messageId,
           senderDeviceId: sender.deviceId,
-          senderKeysetId: sender.keysetId,
+          senderKeysetId: sender.bindingId,
         ),
       );
       for (final recipient in recipients) {
@@ -95,7 +95,7 @@ class PqcV3MessageCodec {
           wraps.add(
             PqcV3RecipientWrap(
               deviceId: recipient.deviceId,
-              keysetId: recipient.keysetId,
+              keysetId: recipient.bindingId,
               kemCiphertext: kem.ciphertextBase64,
               wrappedKey: base64Encode(wrapped),
             ),
@@ -111,11 +111,12 @@ class PqcV3MessageCodec {
       isGroup: isGroup,
       messageId: messageId,
       senderDeviceId: sender.deviceId,
-      keysetId: sender.keysetId,
+      keysetId: sender.bindingId,
+      senderKemPublicKey: sender.kemPublicKeyBase64,
       ciphertext: base64Encode(encrypted),
       conversationId: conversation.id,
       conversationType: conversation.type,
-      senderKeysetId: sender.keysetId,
+      senderKeysetId: sender.bindingId,
       signingPublicKey: sender.signingPublicKeyBase64,
       wraps: wraps,
     );
@@ -127,11 +128,12 @@ class PqcV3MessageCodec {
       isGroup: isGroup,
       messageId: messageId,
       senderDeviceId: sender.deviceId,
-      keysetId: sender.keysetId,
+      keysetId: sender.bindingId,
+      senderKemPublicKey: sender.kemPublicKeyBase64,
       ciphertext: base64Encode(encrypted),
       conversationId: conversation.id,
       conversationType: conversation.type,
-      senderKeysetId: sender.keysetId,
+      senderKeysetId: sender.bindingId,
       signingPublicKey: sender.signingPublicKeyBase64,
       wraps: wraps,
       signature: signature,
@@ -200,7 +202,8 @@ class PqcV3MessageCodec {
       for (final keyset in localKeysets) {
         for (final wrap in envelope.wraps) {
           if (wrap.deviceId == keyset.deviceId &&
-              wrap.keysetId == keyset.keysetId) {
+              (wrap.keysetId == keyset.bindingId ||
+                  wrap.keysetId == keyset.keysetId)) {
             selectedKeyset = keyset;
             selectedWrap = wrap;
             break;

@@ -4,8 +4,9 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
-import 'package:pqcrypto/pqcrypto.dart';
+import 'package:pqcrypto/pqcrypto.dart' hide secureZero;
 
+import 'crypto_utils.dart';
 import 'models.dart';
 
 class PqcAeadBox {
@@ -67,12 +68,14 @@ abstract interface class PqcPrimitiveSuite {
     required List<int> key,
     required List<int> nonce,
     List<int> associatedData = const [],
+    List<int> aad = const [],
   });
 
   Future<Uint8List> decryptAead({
     required PqcAeadBox box,
     required List<int> key,
     List<int> associatedData = const [],
+    List<int> aad = const [],
   });
 
   Future<Uint8List> deriveKey({
@@ -216,14 +219,16 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
     required List<int> key,
     required List<int> nonce,
     List<int> associatedData = const [],
+    List<int> aad = const [],
   }) async {
     _requireLength(key, 32, 'AES-256 key');
     _requireLength(nonce, 12, 'AES-GCM nonce');
+    final effectiveAad = aad.isNotEmpty ? aad : associatedData;
     final box = await _cipher.encrypt(
       plaintext,
       secretKey: SecretKey(key),
       nonce: nonce,
-      aad: associatedData,
+      aad: effectiveAad,
     );
     return PqcAeadBox(
       nonce: box.nonce,
@@ -237,12 +242,14 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
     required PqcAeadBox box,
     required List<int> key,
     List<int> associatedData = const [],
+    List<int> aad = const [],
   }) async {
     _requireLength(key, 32, 'AES-256 key');
+    final effectiveAad = aad.isNotEmpty ? aad : associatedData;
     final clear = await _cipher.decrypt(
       SecretBox(box.ciphertext, nonce: box.nonce, mac: Mac(box.mac)),
       secretKey: SecretKey(key),
-      aad: associatedData,
+      aad: effectiveAad,
     );
     return Uint8List.fromList(clear);
   }

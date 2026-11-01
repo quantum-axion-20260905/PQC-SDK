@@ -2,17 +2,17 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
-import 'package:pqcrypto/pqcrypto.dart' show secureZero;
 
-export 'package:pqcrypto/pqcrypto.dart' show secureZero;
-
-/// Overwrites visible backing storage of a byte list in place.
-void wipeBytes(List<int>? buffer) {
+/// Overwrites sensitive byte buffers in place with zeros.
+void secureZero(List<int>? buffer) {
   if (buffer == null) return;
   for (var i = 0; i < buffer.length; i++) {
     buffer[i] = 0;
   }
 }
+
+/// Overwrites visible backing storage of a byte list in place.
+void wipeBytes(List<int>? buffer) => secureZero(buffer);
 
 /// Constant-time byte array equality comparison.
 ///

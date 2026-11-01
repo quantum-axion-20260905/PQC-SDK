@@ -12,11 +12,13 @@ abstract final class PqcV2Wire {
   /// previous release. New production writes use [groupPrefix] directly.
   static const authenticatedGroupPrefix = 'group:v2-auth';
   static const groupWrapPrefix = 'group-wrap:pqc:v2';
+  static const groupWrapV25Prefix = 'group-wrap:pqc:v2.5';
   static const privateAlgorithm = 'ml-kem-768+a256gcm+ml-dsa-65';
   static const groupAlgorithm = 'a256gcm+group-ml-kem-768+ml-dsa-65';
   static const legacyGroupAlgorithm = 'a256gcm+group-ml-kem-768';
   static const authenticatedGroupAlgorithm = groupAlgorithm;
   static const groupEnvelopeAlgorithm = 'group-ml-kem-768-aesgcm-v2';
+  static const groupEnvelopeV25Algorithm = 'group-ml-kem-768-aesgcm-v2.5';
   static const attachmentCipherVersion = 'attachment:v2';
 }
 
@@ -59,6 +61,12 @@ class PqcDevicePublicKey {
   final String signingPublicKeyBase64;
 
   String get keysetId => computeKeysetId(deviceId, kemPublicKeyBase64);
+
+  String get bindingId => computeKeysetBindingId(
+    deviceId,
+    kemPublicKeyBase64,
+    signingPublicKeyBase64,
+  );
 }
 
 class PqcDeviceKeyset {
@@ -77,6 +85,12 @@ class PqcDeviceKeyset {
   final String signingSecretKeyBase64;
 
   String get keysetId => computeKeysetId(deviceId, kemPublicKeyBase64);
+
+  String get bindingId => computeKeysetBindingId(
+    deviceId,
+    kemPublicKeyBase64,
+    signingPublicKeyBase64,
+  );
 
   PqcDevicePublicKey get publicKey => PqcDevicePublicKey(
     deviceId: deviceId,
@@ -186,4 +200,86 @@ String computeKeysetId(String deviceId, String kemPublicKeyBase64) {
     utf8.encode('$deviceId|$kemPublicKeyBase64'),
   );
   return base64UrlEncode(digest.bytes).replaceAll('=', '');
+}
+
+String computeKeysetBindingId(
+  String deviceId,
+  String kemPublicKeyBase64,
+  String signingPublicKeyBase64,
+) {
+  final canonical = jsonEncode({
+    'device_id': deviceId,
+    'kem_public_key': kemPublicKeyBase64,
+    'signing_public_key': signingPublicKeyBase64,
+  });
+  final digest = crypto.sha256.convert(utf8.encode(canonical));
+  return base64UrlEncode(digest.bytes).replaceAll('=', '');
+}
+
+/// Shared release catalog used by SDK hosts and the backend capability
+/// contract. A release id is not the same thing as a wire protocol: V2.5
+/// keeps the V2 message wire format while adding a V2.5 group-key envelope.
+class PqcProtocolRelease {
+  const PqcProtocolRelease({
+    required this.profileId,
+    required this.releaseId,
+    required this.wireProtocol,
+    required this.supportedProtocolIds,
+  });
+
+  final String profileId;
+  final String releaseId;
+  final String wireProtocol;
+  final List<String> supportedProtocolIds;
+
+  static const v2ReleaseId = '2.0.0';
+  static const v25ReleaseId = '2.5.0';
+  static const v3ReleaseId = '3.0.0';
+
+  static const v2 = PqcProtocolRelease(
+    profileId: 'v2',
+    releaseId: v2ReleaseId,
+    wireProtocol: 'v2',
+    supportedProtocolIds: ['v2'],
+  );
+
+  static const v25 = PqcProtocolRelease(
+    profileId: 'v2.5',
+    releaseId: v25ReleaseId,
+    wireProtocol: 'v2',
+    supportedProtocolIds: ['v2', 'v2.5'],
+  );
+
+  static const v3 = PqcProtocolRelease(
+    profileId: 'v3',
+    releaseId: v3ReleaseId,
+    wireProtocol: 'v3',
+    supportedProtocolIds: ['v2', 'v2.5', 'v3'],
+  );
+
+  static PqcProtocolRelease? tryParse(String value) {
+    switch (value.trim().toLowerCase()) {
+      case 'v2':
+      case '2':
+      case '2.0':
+      case '2.0.0':
+        return v2;
+      case 'v2.5':
+      case 'v25':
+      case 'v2_5':
+      case '2.5':
+      case '2.5.0':
+        return v25;
+      case 'v3':
+      case '3':
+      case '3.0':
+      case '3.0.0':
+        return v3;
+      default:
+        return null;
+    }
+  }
+
+  bool supportsProtocol(String protocolId) =>
+      supportedProtocolIds.contains(protocolId.trim().toLowerCase());
 }

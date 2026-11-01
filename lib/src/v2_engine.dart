@@ -131,4 +131,36 @@ class PqcV2Engine implements PqcEngine {
           epochsById: epochsById,
           trustedSigningKeysByDevice: trustedSigningKeysByDevice,
         );
+
+  Future<String> encodePrivate({
+    required PqcConversation conversation,
+    required String plaintext,
+    required PqcDeviceKeyset sender,
+    required Iterable<PqcDevicePublicKey> recipientDevices,
+    String messageId = '',
+  }) => private.encrypt(
+    conversation: conversation,
+    plaintext: plaintext,
+    sender: sender,
+    recipientDevices: recipientDevices,
+  );
+
+  Future<String> encodeGroup({
+    required PqcConversation conversation,
+    required String plaintext,
+    required PqcGroupEpoch epoch,
+    PqcDeviceKeyset? sender,
+    Iterable<PqcDevicePublicKey> recipientDevices = const [],
+    String messageId = '',
+  }) {
+    if (sender == null) {
+      throw ArgumentError('Sender keyset is required for V2 group encryption.');
+    }
+    return authenticatedGroup.encrypt(
+      conversation: conversation,
+      plaintext: plaintext,
+      epoch: epoch,
+      sender: sender,
+    );
+  }
 }

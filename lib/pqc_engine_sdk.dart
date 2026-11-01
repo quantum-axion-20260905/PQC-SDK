@@ -15,6 +15,7 @@ export 'src/v2_authenticated_group_codec.dart';
 export 'src/v2_compatibility_decoder.dart';
 export 'src/v2_engine.dart';
 export 'src/v25_writer.dart';
+export 'src/v25_group_epoch_codec.dart';
 export 'src/v2_group_codec.dart';
 export 'src/v2_private_codec.dart';
 export 'src/v3_attachment_codec.dart';

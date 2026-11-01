@@ -11,6 +11,7 @@ class PqcV3Envelope {
     required this.messageId,
     required this.senderDeviceId,
     required this.keysetId,
+    this.senderKemPublicKey,
     required this.ciphertext,
     this.metadata = const {},
     this.conversationId,
@@ -25,6 +26,7 @@ class PqcV3Envelope {
   final String messageId;
   final String senderDeviceId;
   final String keysetId;
+  final String? senderKemPublicKey;
   final String ciphertext;
   final Map<String, dynamic> metadata;
   final int? conversationId;
@@ -42,6 +44,7 @@ class PqcV3Envelope {
     'message_id': messageId,
     'sender_device_id': senderDeviceId,
     'keyset_id': keysetId,
+    if (senderKemPublicKey != null) 'sender_kem_public_key': senderKemPublicKey,
     'ciphertext': ciphertext,
     'metadata': metadata,
     if (conversationId != null) 'conversation_id': conversationId,
@@ -94,6 +97,7 @@ class PqcV3Envelope {
       messageId: decoded['message_id'] as String? ?? '',
       senderDeviceId: decoded['sender_device_id'] as String? ?? '',
       keysetId: decoded['keyset_id'] as String? ?? '',
+      senderKemPublicKey: decoded['sender_kem_public_key'] as String?,
       ciphertext: decoded['ciphertext'] as String? ?? '',
       metadata: Map<String, dynamic>.from(
         decoded['metadata'] as Map? ?? const {},
