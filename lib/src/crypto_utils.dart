@@ -1,4 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:cryptography/cryptography.dart';
+import 'package:pqcrypto/pqcrypto.dart' show secureZero;
 
 export 'package:pqcrypto/pqcrypto.dart' show secureZero;
 
@@ -104,5 +108,34 @@ void _writeCanonical(dynamic value, StringBuffer buffer) {
     } catch (_) {
       throw FormatException('Unsupported type for canonical JSON: ${value.runtimeType}');
     }
+  }
+}
+
+/// Combines a classical shared secret (e.g. X25519) and a post-quantum shared secret (e.g. ML-KEM)
+/// into a quantum-resistant hybrid master secret via HKDF-SHA256 (NIST SP 800-227 / RFC 9180 recommendation).
+///
+/// An attacker must break BOTH the classical Diffie-Hellman algorithm AND the post-quantum
+/// lattice problem to recover the resulting secret.
+Future<Uint8List> deriveHybridSharedSecret({
+  required List<int> classicalSecret,
+  required List<int> postQuantumSecret,
+  List<int>? salt,
+  List<int>? info,
+}) async {
+  final ikm = Uint8List(classicalSecret.length + postQuantumSecret.length);
+  ikm.setAll(0, classicalSecret);
+  ikm.setAll(classicalSecret.length, postQuantumSecret);
+
+  try {
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    final secretKey = SecretKey(ikm);
+    final derived = await hkdf.deriveKey(
+      secretKey: secretKey,
+      nonce: salt ?? utf8.encode('pqc-hybrid-salt-v1'),
+      info: info ?? utf8.encode('pqc-hybrid-kem-v1'),
+    );
+    return Uint8List.fromList(await derived.extractBytes());
+  } finally {
+    secureZero(ikm);
   }
 }

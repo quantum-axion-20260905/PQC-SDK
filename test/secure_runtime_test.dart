@@ -1511,4 +1511,190 @@ void main() {
       expect(health.snapshot.isSafeToWrite, isTrue);
     },
   );
+
+  group('PqcSecureRuntime Advanced Differentiators (Ratchet, Streaming & Sender Keys)', () {
+    late PqcMemoryAtomicStore storeA;
+    late PqcMemoryAtomicStore storeB;
+    late PqcKeyVaultRepository vaultA;
+    late PqcKeyVaultRepository vaultB;
+    late PqcSecureRuntime runtimeA;
+    late PqcSecureRuntime runtimeB;
+    late PqcV3Engine engine;
+
+    setUp(() async {
+      final bundleA = PqcEngineBundles.v3(writerEnabled: true);
+      final bundleB = PqcEngineBundles.v3(writerEnabled: true);
+      engine = bundleA.writer as PqcV3Engine;
+      storeA = PqcMemoryAtomicStore();
+      storeB = PqcMemoryAtomicStore();
+      vaultA = PqcIntegrityKeyVault(
+        store: storeA,
+        allowInsecureStoreForTesting: true,
+      );
+      vaultB = PqcIntegrityKeyVault(
+        store: storeB,
+        allowInsecureStoreForTesting: true,
+      );
+
+      final recoveryA = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: vaultA,
+        transport: PqcMemoryRecoveryRepository(),
+        keyProvider: const _FixedRecoveryKeyProvider(1),
+      );
+      final recoveryB = PqcRecoveryCoordinator(
+        allowUnauthenticatedRecoveryForTesting: true,
+        vault: vaultB,
+        transport: PqcMemoryRecoveryRepository(),
+        keyProvider: const _FixedRecoveryKeyProvider(2),
+      );
+
+      runtimeA = PqcSecureRuntime(
+        manager: bundleA.manager,
+        vault: vaultA,
+        recovery: recoveryA,
+        replayGuard: PqcReplayGuard(PqcMemoryReplayStore()),
+      );
+
+      runtimeB = PqcSecureRuntime(
+        manager: bundleB.manager,
+        vault: vaultB,
+        recovery: recoveryB,
+        replayGuard: PqcReplayGuard(PqcMemoryReplayStore()),
+      );
+
+      await runtimeA.initializeAccount('alice@example.com');
+      await runtimeB.initializeAccount('bob@example.com');
+    });
+
+    test('createInitiatorRatchet and createResponderRatchet establish two-way session between runtimes', () async {
+      // 1. Must fail if current key missing
+      expect(
+        () => runtimeA.createInitiatorRatchet(
+          accountId: 'alice@example.com',
+          conversationId: 999,
+          remoteDevice: const PqcDevicePublicKey(
+            deviceId: 'bob-device',
+            kemPublicKeyBase64: '',
+            signingPublicKeyBase64: '',
+          ),
+        ),
+        throwsA(isA<PqcSecureRuntimeException>()),
+      );
+
+      // 2. Rotate keysets
+      final aliceKey = await runtimeA.rotateDeviceKeyset(
+        accountId: 'alice@example.com',
+        deviceId: 'alice-phone',
+      );
+      final bobKey = await runtimeB.rotateDeviceKeyset(
+        accountId: 'bob@example.com',
+        deviceId: 'bob-phone',
+      );
+
+      // 3. Alice initiates ratchet to Bob
+      final handshake = await runtimeA.createInitiatorRatchet(
+        accountId: 'alice@example.com',
+        conversationId: 999,
+        remoteDevice: bobKey.publicKey,
+      );
+      final aliceSession = handshake.session;
+
+      // 4. Bob responds to Alice's handshake
+      final bobSession = await runtimeB.createResponderRatchet(
+        accountId: 'bob@example.com',
+        conversationId: 999,
+        remoteDeviceId: aliceKey.deviceId,
+        initialKemCiphertextBase64: handshake.initialKemCiphertextBase64,
+      );
+
+      // 5. Alice sends to Bob
+      final msg1 = await aliceSession.encrypt(
+        plaintext: 'Hello from Alice runtime!',
+        remoteKemPublicKeyBase64: bobKey.kemPublicKeyBase64,
+      );
+      final dec1 = await bobSession.decrypt(
+        payload: msg1,
+        trustedRemoteSigningKeys: {aliceKey.signingPublicKeyBase64},
+      );
+      expect(dec1, 'Hello from Alice runtime!');
+
+      // 6. Bob replies to Alice
+      final reply = await bobSession.encrypt(
+        plaintext: 'Hello back from Bob runtime!',
+        remoteKemPublicKeyBase64: aliceKey.kemPublicKeyBase64,
+      );
+      final decReply = await aliceSession.decrypt(
+        payload: reply,
+        trustedRemoteSigningKeys: {bobKey.signingPublicKeyBase64},
+      );
+      expect(decReply, 'Hello back from Bob runtime!');
+
+      aliceSession.dispose();
+      bobSession.dispose();
+    });
+
+    test('resolveChunkedAttachmentContentKey resolves streaming key using local vault keys', () async {
+      final aliceKey = await runtimeA.rotateDeviceKeyset(
+        accountId: 'alice@example.com',
+        deviceId: 'alice-phone',
+      );
+      final bobKey = await runtimeB.rotateDeviceKeyset(
+        accountId: 'bob@example.com',
+        deviceId: 'bob-phone',
+      );
+
+      final manifestRes = await engine.chunkedAttachment.createManifest(
+        attachmentId: 'att-xyz-123',
+        conversation: const PqcConversation(id: 42, type: 'private'),
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        totalSizeBytes: 1024,
+        plaintextSha256: 'a' * 64,
+        sender: aliceKey,
+        recipientDevices: [bobKey.publicKey],
+      );
+
+      // Bob's runtime resolves content key from vault keysets
+      final contentKey = await runtimeB.resolveChunkedAttachmentContentKey(
+        accountId: 'bob@example.com',
+        manifest: manifestRes.manifest,
+        trustedSigningKeysByDevice: {
+          aliceKey.deviceId: {aliceKey.signingPublicKeyBase64},
+        },
+      );
+
+      expect(contentKey, equals(manifestRes.contentKey));
+    });
+
+    test('createGroupSenderKeyDistribution and receiveGroupSenderKeyDistribution integrate with vault', () async {
+      final aliceKey = await runtimeA.rotateDeviceKeyset(
+        accountId: 'alice@example.com',
+        deviceId: 'alice-phone',
+      );
+      final bobKey = await runtimeB.rotateDeviceKeyset(
+        accountId: 'bob@example.com',
+        deviceId: 'bob-phone',
+      );
+
+      // Alice creates group sender key distribution
+      final distRes = await runtimeA.createGroupSenderKeyDistribution(
+        accountId: 'alice@example.com',
+        conversationId: 500,
+        epochId: 'epoch-1',
+        memberDevices: [bobKey.publicKey],
+      );
+
+      // Bob receives distribution and extracts chain key
+      final bobChainKey = await runtimeB.receiveGroupSenderKeyDistribution(
+        accountId: 'bob@example.com',
+        distribution: distRes.distribution,
+        trustedSigningKeysByDevice: {
+          aliceKey.deviceId: {aliceKey.signingPublicKeyBase64},
+        },
+      );
+
+      expect(bobChainKey, equals(distRes.senderChainKey));
+    });
+  });
 }

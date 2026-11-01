@@ -239,7 +239,7 @@ class PqcV3ChunkedAttachmentCodec {
     required String attachmentId,
     required List<int> contentKey,
   }) async {
-    final nonce = _deriveChunkNonce(attachmentId, chunkIndex);
+    final nonce = _deriveChunkNonce(attachmentId, chunkIndex, contentKey);
     final aad = utf8.encode('$attachmentId:chunk:$chunkIndex');
 
     final box = await _primitives.encryptAead(
@@ -338,11 +338,22 @@ class PqcV3ChunkedAttachmentCodec {
     }
   }
 
-  /// Deterministically derives a 12-byte nonce for a chunk to prevent reuse.
-  Uint8List _deriveChunkNonce(String attachmentId, int chunkIndex) {
-    final digest = crypto.sha256.convert(
-      utf8.encode('$attachmentId:nonce:$chunkIndex'),
-    );
-    return Uint8List.fromList(digest.bytes.sublist(0, 12));
+  /// Deterministically derives a 12-byte nonce for a chunk per NIST SP 800-38D Section 8.2.1:
+  /// 8-byte fixed salt bound to the secret content key and attachmentId, concatenated with
+  /// a 4-byte big-endian chunk counter to ensure distinct nonces across all chunks.
+  Uint8List _deriveChunkNonce(
+    String attachmentId,
+    int chunkIndex,
+    List<int> contentKey,
+  ) {
+    final saltDigest = crypto.sha256.convert([
+      ...contentKey,
+      ...utf8.encode('pqc:chunk-nonce-salt:$attachmentId'),
+    ]);
+    final nonce = Uint8List(12);
+    nonce.setRange(0, 8, saltDigest.bytes.sublist(0, 8));
+    ByteData.view(nonce.buffer, nonce.offsetInBytes, 12)
+        .setUint32(8, chunkIndex, Endian.big);
+    return nonce;
   }
 }

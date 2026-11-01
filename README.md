@@ -321,4 +321,4 @@ dart test
 dart compile js tool/web_smoke.dart -O2 -o /tmp/pqc_engine_sdk.js
 ```
 
-All 94 tests run against real FIPS-standardized ML-KEM, ML-DSA, and AES-256-GCM primitives.
+All 103 tests run against real FIPS-standardized ML-KEM, ML-DSA, and AES-256-GCM primitives.

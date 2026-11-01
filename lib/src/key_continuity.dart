@@ -1,3 +1,4 @@
+import 'crypto_utils.dart';
 import 'models.dart';
 import 'secure_key_vault.dart';
 
@@ -50,15 +51,15 @@ class PqcKeyContinuityGuard {
 bool _sameKeyset(PqcDeviceKeyset left, PqcDeviceKeyset right) =>
     left.deviceId == right.deviceId &&
     left.kemPublicKeyBase64 == right.kemPublicKeyBase64 &&
-    left.kemSecretKeyBase64 == right.kemSecretKeyBase64 &&
+    constantTimeStringEquals(
+      left.kemSecretKeyBase64,
+      right.kemSecretKeyBase64,
+    ) &&
     left.signingPublicKeyBase64 == right.signingPublicKeyBase64 &&
-    left.signingSecretKeyBase64 == right.signingSecretKeyBase64;
+    constantTimeStringEquals(
+      left.signingSecretKeyBase64,
+      right.signingSecretKeyBase64,
+    );
 
-bool _sameBytes(List<int> left, List<int> right) {
-  if (left.length != right.length) return false;
-  var difference = 0;
-  for (var index = 0; index < left.length; index++) {
-    difference |= left[index] ^ right[index];
-  }
-  return difference == 0;
-}
+bool _sameBytes(List<int> left, List<int> right) =>
+    constantTimeBytesEquals(left, right);

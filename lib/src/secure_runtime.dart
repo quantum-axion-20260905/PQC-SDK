@@ -1,10 +1,16 @@
+import 'dart:typed_data';
+
 import 'health_monitor.dart';
 import 'models.dart';
+import 'pqc_group_sender_key.dart';
+import 'pqc_ratchet.dart';
+import 'primitives.dart';
 import 'recovery.dart';
 import 'replay_guard.dart';
 import 'secure_key_vault.dart';
 import 'v2_engine.dart';
 import 'v3_attachment_codec.dart';
+import 'v3_chunked_attachment.dart';
 import 'version_manager.dart';
 
 class PqcSecureRuntimeException implements Exception {
@@ -518,6 +524,123 @@ class PqcSecureRuntime {
       );
     }
     return decision;
+  }
+
+  /// Initializes a forward-secret, authenticated PQC ratchet session as initiator.
+  Future<PqcInitiatorHandshake> createInitiatorRatchet({
+    required String accountId,
+    required int conversationId,
+    required PqcDevicePublicKey remoteDevice,
+    PqcPrimitiveSuite? primitives,
+  }) async {
+    _requireInitialized(accountId);
+    final current = await _vaultCall(
+      () => vault.readCurrentDeviceKeyset(accountId),
+    );
+    if (current == null) {
+      throw const PqcSecureRuntimeException('Current device keyset is missing.');
+    }
+    final suite = primitives ?? DartPqcPrimitiveSuite();
+    return PqcRatchetSession.createInitiator(
+      conversationId: conversationId,
+      localDevice: current,
+      remoteDevice: remoteDevice,
+      primitives: suite,
+    );
+  }
+
+  /// Initializes a forward-secret, authenticated PQC ratchet session as responder.
+  Future<PqcRatchetSession> createResponderRatchet({
+    required String accountId,
+    required int conversationId,
+    required String remoteDeviceId,
+    required String initialKemCiphertextBase64,
+    PqcPrimitiveSuite? primitives,
+  }) async {
+    _requireInitialized(accountId);
+    final current = await _vaultCall(
+      () => vault.readCurrentDeviceKeyset(accountId),
+    );
+    if (current == null) {
+      throw const PqcSecureRuntimeException('Current device keyset is missing.');
+    }
+    final suite = primitives ?? DartPqcPrimitiveSuite();
+    return PqcRatchetSession.createResponder(
+      conversationId: conversationId,
+      localDevice: current,
+      remoteDeviceId: remoteDeviceId,
+      initialKemCiphertextBase64: initialKemCiphertextBase64,
+      primitives: suite,
+    );
+  }
+
+  /// Resolves the content key of a streaming V3 chunked attachment using local vault keysets.
+  Future<Uint8List> resolveChunkedAttachmentContentKey({
+    required String accountId,
+    required PqcV3ChunkedAttachmentManifest manifest,
+    required Map<String, Set<String>> trustedSigningKeysByDevice,
+    PqcPrimitiveSuite? primitives,
+  }) async {
+    _requireInitialized(accountId);
+    final current = await _vaultCall(
+      () => vault.readCurrentDeviceKeyset(accountId),
+    );
+    final historical = await _vaultCall(
+      () => vault.readHistoricalDeviceKeysets(accountId),
+    );
+    final codec = PqcV3ChunkedAttachmentCodec(primitives ?? DartPqcPrimitiveSuite());
+    return codec.resolveContentKey(
+      manifest: manifest,
+      localKeysets: [?current, ...historical],
+      trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+    );
+  }
+
+  /// Creates a group sender key distribution envelope for a new epoch using the current device keyset.
+  Future<({PqcSenderKeyDistribution distribution, Uint8List senderChainKey})>
+      createGroupSenderKeyDistribution({
+    required String accountId,
+    required int conversationId,
+    required String epochId,
+    required Iterable<PqcDevicePublicKey> memberDevices,
+    PqcPrimitiveSuite? primitives,
+  }) async {
+    _requireInitialized(accountId);
+    final current = await _vaultCall(
+      () => vault.readCurrentDeviceKeyset(accountId),
+    );
+    if (current == null) {
+      throw const PqcSecureRuntimeException('Current device keyset is missing.');
+    }
+    final engine = PqcGroupSenderKeyEngine(primitives ?? DartPqcPrimitiveSuite());
+    return engine.createDistribution(
+      conversationId: conversationId,
+      epochId: epochId,
+      sender: current,
+      memberDevices: memberDevices,
+    );
+  }
+
+  /// Resolves the sender's chain key from a distribution envelope using local vault keysets.
+  Future<Uint8List> receiveGroupSenderKeyDistribution({
+    required String accountId,
+    required PqcSenderKeyDistribution distribution,
+    required Map<String, Set<String>> trustedSigningKeysByDevice,
+    PqcPrimitiveSuite? primitives,
+  }) async {
+    _requireInitialized(accountId);
+    final current = await _vaultCall(
+      () => vault.readCurrentDeviceKeyset(accountId),
+    );
+    final historical = await _vaultCall(
+      () => vault.readHistoricalDeviceKeysets(accountId),
+    );
+    final engine = PqcGroupSenderKeyEngine(primitives ?? DartPqcPrimitiveSuite());
+    return engine.receiveDistribution(
+      distribution: distribution,
+      localKeysets: [?current, ...historical],
+      trustedSigningKeysByDevice: trustedSigningKeysByDevice,
+    );
   }
 }
 

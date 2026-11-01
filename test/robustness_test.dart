@@ -151,4 +151,47 @@ void main() {
       throwsA(anything),
     );
   });
+
+  test('CSPRNG produces non-zero entropy without bitwise 32-bit shift truncation', () {
+    final suite = DartPqcPrimitiveSuite();
+    final bytes32 = suite.randomBytes(32);
+    expect(bytes32.length, 32);
+    expect(bytes32.any((b) => b != 0), isTrue);
+
+    final bytes16 = suite.randomBytes(16);
+    expect(bytes16.length, 16);
+    expect(bytes16.any((b) => b != 0), isTrue);
+  });
+
+  test('PqcGroupSenderKeyEngine rejects truncated recipient wraps (< 28 bytes)', () async {
+    final primitives = DartPqcPrimitiveSuite();
+    final engine = PqcGroupSenderKeyEngine(primitives);
+    final sender = primitives.generateDeviceKeyset('sender');
+    final recipient = primitives.generateDeviceKeyset('recipient');
+
+    final distribution = PqcSenderKeyDistribution(
+      conversationId: 777,
+      epochId: 'ep1',
+      senderDeviceId: sender.deviceId,
+      senderKeysetId: sender.keysetId,
+      signingPublicKey: sender.signingPublicKeyBase64,
+      wraps: [
+        PqcV3RecipientWrap(
+          deviceId: recipient.deviceId,
+          keysetId: recipient.keysetId,
+          kemCiphertext: base64Encode(List.filled(DartPqcPrimitiveSuite.kemCiphertextLength, 1)),
+          wrappedKey: base64Encode([1, 2, 3]), // Only 3 bytes (< 28)
+        ),
+      ],
+    );
+
+    await expectLater(
+      engine.receiveDistribution(
+        distribution: distribution,
+        localKeysets: [recipient],
+        trustedSigningKeysByDevice: {sender.deviceId: {sender.signingPublicKeyBase64}},
+      ),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }

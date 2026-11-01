@@ -96,7 +96,8 @@ class PqcV3AttachmentEnvelope {
     if (includeSignature && signature != null) 'signature': signature,
   };
 
-  String unsignedCanonicalJson() => jsonEncode(toJson(includeSignature: false));
+  String unsignedCanonicalJson() =>
+      canonicalJsonEncode(toJson(includeSignature: false));
 
   String encode() =>
       '$prefix:${base64UrlEncode(utf8.encode(jsonEncode(toJson())))}';

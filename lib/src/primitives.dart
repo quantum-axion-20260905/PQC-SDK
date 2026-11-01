@@ -115,13 +115,18 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
     final (signingPublic, signingSecret) = MlDsa.generateKeyPair(
       _signingParams,
     );
-    return PqcDeviceKeyset(
-      deviceId: deviceId,
-      kemPublicKeyBase64: base64Encode(kemPublic),
-      kemSecretKeyBase64: base64Encode(kemSecret),
-      signingPublicKeyBase64: base64Encode(signingPublic),
-      signingSecretKeyBase64: base64Encode(signingSecret),
-    );
+    try {
+      return PqcDeviceKeyset(
+        deviceId: deviceId,
+        kemPublicKeyBase64: base64Encode(kemPublic),
+        kemSecretKeyBase64: base64Encode(kemSecret),
+        signingPublicKeyBase64: base64Encode(signingPublic),
+        signingSecretKeyBase64: base64Encode(signingSecret),
+      );
+    } finally {
+      secureZero(kemSecret);
+      secureZero(signingSecret);
+    }
   }
 
   @override
@@ -153,7 +158,11 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
       kemSecretKeyLength,
       'ML-KEM secret key',
     );
-    return _kem.decapsulate(secretKey, ciphertext);
+    try {
+      return _kem.decapsulate(secretKey, ciphertext);
+    } finally {
+      secureZero(secretKey);
+    }
   }
 
   @override
@@ -163,14 +172,18 @@ class DartPqcPrimitiveSuite implements PqcPrimitiveSuite {
       signingSecretKeyLength,
       'ML-DSA secret key',
     );
-    return base64Encode(
-      MlDsa.sign(
-        secretKey,
-        Uint8List.fromList(message),
-        _signingParams,
-        ctx: Uint8List.fromList(signingContext.codeUnits),
-      ),
-    );
+    try {
+      return base64Encode(
+        MlDsa.sign(
+          secretKey,
+          Uint8List.fromList(message),
+          _signingParams,
+          ctx: Uint8List.fromList(signingContext.codeUnits),
+        ),
+      );
+    } finally {
+      secureZero(secretKey);
+    }
   }
 
   @override

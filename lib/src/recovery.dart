@@ -521,7 +521,7 @@ bool _sameSnapshotMaterial(
 ) {
   final leftJson = {...left.toJson()}..remove('revision');
   final rightJson = {...right.toJson()}..remove('revision');
-  return jsonEncode(leftJson) == jsonEncode(rightJson);
+  return canonicalJsonEncode(leftJson) == canonicalJsonEncode(rightJson);
 }
 
 String _sha256Hex(List<int> bytes) => crypto.sha256.convert(bytes).toString();

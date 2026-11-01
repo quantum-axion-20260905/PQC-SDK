@@ -95,7 +95,7 @@ class PqcV2PrivateCodec {
       'wraps': wraps,
     };
     final signature = _primitives.sign(
-      message: utf8.encode(jsonEncode(unsigned)),
+      message: utf8.encode(canonicalJsonEncode(unsigned)),
       secretKeyBase64: sender.signingSecretKeyBase64,
     );
     return '${PqcV2Wire.privatePrefix}:${_encodeDocument({...unsigned, 'signature': signature})}';
@@ -134,7 +134,7 @@ class PqcV2PrivateCodec {
         return const PqcDecodeError(PqcDecodeFailure.untrustedSender);
       }
       if (!_primitives.verify(
-        message: utf8.encode(jsonEncode(document)),
+        message: utf8.encode(canonicalJsonEncode(document)),
         signatureBase64: signature,
         publicKeyBase64: signingPublicKey,
       )) {

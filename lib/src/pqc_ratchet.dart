@@ -124,6 +124,8 @@ class PqcRatchetSession {
     }
   }
 
+  static const int maxSkippedMessages = 100;
+
   final int conversationId;
   final PqcDeviceKeyset localDevice;
   final String remoteDeviceId;
@@ -132,11 +134,14 @@ class PqcRatchetSession {
   Uint8List _rootKey;
   Uint8List _sendingChainKey;
   Uint8List _receivingChainKey;
+  final Map<int, Uint8List> _skippedChainKeys = {};
   int _sendSequence = 0;
   int _receiveSequence = 0;
   bool _isDisposed = false;
 
   bool get isDisposed => _isDisposed;
+  int get sendSequence => _sendSequence;
+  int get receiveSequence => _receiveSequence;
 
   /// Initiator initialization: sets up initial sending chain key.
   static Future<PqcInitiatorHandshake> createInitiator({
@@ -162,6 +167,11 @@ class PqcRatchetSession {
       session._sendingChainKey = await primitives.deriveKey(
         secret: session._rootKey,
         nonce: utf8.encode('send-chain'),
+        info: utf8.encode('chain-v1'),
+      );
+      session._receivingChainKey = await primitives.deriveKey(
+        secret: session._rootKey,
+        nonce: utf8.encode('recv-chain'),
         info: utf8.encode('chain-v1'),
       );
       return PqcInitiatorHandshake(
@@ -203,6 +213,11 @@ class PqcRatchetSession {
         nonce: utf8.encode('send-chain'),
         info: utf8.encode('chain-v1'),
       );
+      session._sendingChainKey = await primitives.deriveKey(
+        secret: session._rootKey,
+        nonce: utf8.encode('recv-chain'),
+        info: utf8.encode('chain-v1'),
+      );
       return session;
     } finally {
       secureZero(sharedSecret);
@@ -230,11 +245,11 @@ class PqcRatchetSession {
         info: utf8.encode('root-ratchet-$_sendSequence'),
       );
 
-      // Derive fresh message key and advance sending chain key
+      // Derive fresh message key bound to both symmetric chain and KEM entropy
       messageKey = await _primitives.deriveKey(
         secret: _sendingChainKey,
-        nonce: utf8.encode('message-key-$_sendSequence'),
-        info: utf8.encode('pqc-msg-v1'),
+        nonce: kem.sharedSecret,
+        info: utf8.encode('pqc-msg-$_sendSequence'),
       );
 
       newSendingChainKey = await _primitives.deriveKey(
@@ -295,7 +310,7 @@ class PqcRatchetSession {
     }
   }
 
-  /// Decrypts a ratcheted payload with forward secrecy and verifies authenticity.
+  /// Decrypts a ratcheted payload with forward secrecy, out-of-order handling and authenticity.
   Future<String> decrypt({
     required String payload,
     required Set<String> trustedRemoteSigningKeys,
@@ -306,9 +321,6 @@ class PqcRatchetSession {
     if (envelope.conversationId != conversationId ||
         envelope.senderDeviceId != remoteDeviceId) {
       throw const FormatException('Ratchet envelope conversation/sender mismatch.');
-    }
-    if (envelope.sequenceNumber < _receiveSequence) {
-      throw const FormatException('Replay detected or old sequence number received.');
     }
 
     final signature = envelope.signatureBase64;
@@ -332,6 +344,11 @@ class PqcRatchetSession {
       throw const FormatException('Ratchet signature verification failed.');
     }
 
+    final seq = envelope.sequenceNumber;
+    if (seq < 0) {
+      throw const FormatException('Invalid sequence number in ratchet envelope.');
+    }
+
     // Decapsulate ephemeral KEM secret for Post-Compromise Security
     final sharedSecret = _primitives.decapsulate(
       ciphertextBase64: envelope.kemCiphertextBase64,
@@ -339,30 +356,62 @@ class PqcRatchetSession {
     );
 
     Uint8List? messageKey;
-    Uint8List? newReceivingChainKey;
-    Uint8List? newRootKey;
     Uint8List? clear;
 
     try {
-      newRootKey = await _primitives.deriveKey(
-        secret: _rootKey,
-        nonce: sharedSecret,
-        info: utf8.encode('root-ratchet-${envelope.sequenceNumber}'),
-      );
+      if (seq < _receiveSequence) {
+        // Look up previously skipped message key
+        final skippedKey = _skippedChainKeys.remove(seq);
+        if (skippedKey == null) {
+          throw const FormatException('Replay detected or old sequence number received.');
+        }
+        try {
+          messageKey = await _primitives.deriveKey(
+            secret: skippedKey,
+            nonce: sharedSecret,
+            info: utf8.encode('pqc-msg-$seq'),
+          );
+        } finally {
+          secureZero(skippedKey);
+        }
+      } else {
+        // Check for reasonable skip gap to prevent DoS memory exhaustion
+        if (seq - _receiveSequence > maxSkippedMessages) {
+          throw FormatException(
+            'Too many skipped messages in ratchet sequence: gap is ${seq - _receiveSequence}.',
+          );
+        }
 
-      messageKey = await _primitives.deriveKey(
-        secret: _receivingChainKey,
-        nonce: utf8.encode('message-key-${envelope.sequenceNumber}'),
-        info: utf8.encode('pqc-msg-v1'),
-      );
+        // Cache any skipped chain keys between _receiveSequence and seq
+        while (_receiveSequence < seq) {
+          _skippedChainKeys[_receiveSequence] = Uint8List.fromList(_receivingChainKey);
+          final nextChain = await _primitives.deriveKey(
+            secret: _receivingChainKey,
+            nonce: utf8.encode('advance-chain'),
+            info: utf8.encode('chain-step-$_receiveSequence'),
+          );
+          secureZero(_receivingChainKey);
+          _receivingChainKey = nextChain;
+          _receiveSequence++;
+        }
 
-      newReceivingChainKey = await _primitives.deriveKey(
-        secret: _receivingChainKey,
-        nonce: utf8.encode('advance-chain'),
-        info: utf8.encode('chain-step-${envelope.sequenceNumber}'),
-      );
+        messageKey = await _primitives.deriveKey(
+          secret: _receivingChainKey,
+          nonce: sharedSecret,
+          info: utf8.encode('pqc-msg-$seq'),
+        );
 
-      final aad = utf8.encode('$conversationId:$remoteDeviceId:${envelope.sequenceNumber}');
+        final nextChain = await _primitives.deriveKey(
+          secret: _receivingChainKey,
+          nonce: utf8.encode('advance-chain'),
+          info: utf8.encode('chain-step-$seq'),
+        );
+        secureZero(_receivingChainKey);
+        _receivingChainKey = nextChain;
+        _receiveSequence = seq + 1;
+      }
+
+      final aad = utf8.encode('$conversationId:$remoteDeviceId:$seq');
 
       clear = await _primitives.decryptAead(
         box: PqcAeadBox(
@@ -373,13 +422,6 @@ class PqcRatchetSession {
         key: messageKey,
         associatedData: aad,
       );
-
-      // Advance receiving ratchet state
-      secureZero(_rootKey);
-      _rootKey = newRootKey;
-      secureZero(_receivingChainKey);
-      _receivingChainKey = newReceivingChainKey;
-      _receiveSequence = envelope.sequenceNumber + 1;
 
       return utf8.decode(clear, allowMalformed: false);
     } finally {
@@ -395,6 +437,10 @@ class PqcRatchetSession {
     secureZero(_rootKey);
     secureZero(_sendingChainKey);
     secureZero(_receivingChainKey);
+    for (final key in _skippedChainKeys.values) {
+      secureZero(key);
+    }
+    _skippedChainKeys.clear();
     _isDisposed = true;
   }
 

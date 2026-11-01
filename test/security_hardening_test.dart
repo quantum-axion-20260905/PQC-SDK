@@ -124,6 +124,18 @@ void main() {
       );
       expect(decrypted1, 'Alice dan ikkinchi xabar #1');
 
+      // Bob sends reply to Alice (Full bidirectional test)
+      final bobReplyPayload = await bobSession.encrypt(
+        plaintext: 'Salom Alice! Qabul qildim va javob yozyapman #0',
+        remoteKemPublicKeyBase64: aliceKeys.kemPublicKeyBase64,
+      );
+
+      final decryptedReply = await aliceSession.decrypt(
+        payload: bobReplyPayload,
+        trustedRemoteSigningKeys: {bobKeys.signingPublicKeyBase64},
+      );
+      expect(decryptedReply, 'Salom Alice! Qabul qildim va javob yozyapman #0');
+
       // Replay of msg0 should fail because sequence has advanced
       expect(
         () => bobSession.decrypt(
@@ -158,6 +170,196 @@ void main() {
         ),
         throwsStateError,
       );
+    });
+
+    test('handles out-of-order message arrival seamlessly', () async {
+      const conversationId = 888;
+      final handshake = await PqcRatchetSession.createInitiator(
+        conversationId: conversationId,
+        localDevice: aliceKeys,
+        remoteDevice: bobKeys.publicKey,
+        primitives: primitives,
+      );
+      final alice = handshake.session;
+      final bob = await PqcRatchetSession.createResponder(
+        conversationId: conversationId,
+        localDevice: bobKeys,
+        remoteDeviceId: aliceKeys.deviceId,
+        initialKemCiphertextBase64: handshake.initialKemCiphertextBase64,
+        primitives: primitives,
+      );
+
+      // Alice sends messages 0, 1, 2
+      final msg0 = await alice.encrypt(
+        plaintext: 'Message 0',
+        remoteKemPublicKeyBase64: bobKeys.kemPublicKeyBase64,
+      );
+      final msg1 = await alice.encrypt(
+        plaintext: 'Message 1',
+        remoteKemPublicKeyBase64: bobKeys.kemPublicKeyBase64,
+      );
+      final msg2 = await alice.encrypt(
+        plaintext: 'Message 2',
+        remoteKemPublicKeyBase64: bobKeys.kemPublicKeyBase64,
+      );
+
+      // Bob receives Message 0 first
+      expect(
+        await bob.decrypt(
+          payload: msg0,
+          trustedRemoteSigningKeys: {aliceKeys.signingPublicKeyBase64},
+        ),
+        'Message 0',
+      );
+
+      // Network delivers Message 2 before Message 1 (out-of-order)
+      expect(
+        await bob.decrypt(
+          payload: msg2,
+          trustedRemoteSigningKeys: {aliceKeys.signingPublicKeyBase64},
+        ),
+        'Message 2',
+      );
+
+      // Later, delayed Message 1 arrives and decrypts cleanly via skipped message cache
+      expect(
+        await bob.decrypt(
+          payload: msg1,
+          trustedRemoteSigningKeys: {aliceKeys.signingPublicKeyBase64},
+        ),
+        'Message 1',
+      );
+
+      // Duplicate / replay of delayed message now fails
+      expect(
+        () => bob.decrypt(
+          payload: msg1,
+          trustedRemoteSigningKeys: {aliceKeys.signingPublicKeyBase64},
+        ),
+        throwsA(isA<FormatException>()),
+      );
+
+      alice.dispose();
+      bob.dispose();
+    });
+  });
+
+  group('Hybrid Cryptography (Classical + Post-Quantum)', () {
+    test('deriveHybridSharedSecret blends classical and PQC entropy', () async {
+      final classicalX25519Secret = List<int>.generate(32, (i) => i + 1);
+      final pqcKyber768Secret = List<int>.generate(32, (i) => 255 - i);
+
+      final hybrid1 = await deriveHybridSharedSecret(
+        classicalSecret: classicalX25519Secret,
+        postQuantumSecret: pqcKyber768Secret,
+      );
+
+      final hybrid2 = await deriveHybridSharedSecret(
+        classicalSecret: classicalX25519Secret,
+        postQuantumSecret: pqcKyber768Secret,
+      );
+
+      // Deterministic derivation for identical inputs
+      expect(hybrid1.length, 32);
+      expect(hybrid1, equals(hybrid2));
+
+      // Altering classical secret changes output
+      final alteredClassical = List<int>.from(classicalX25519Secret)..[0] ^= 0x01;
+      final hybridDifferentClassical = await deriveHybridSharedSecret(
+        classicalSecret: alteredClassical,
+        postQuantumSecret: pqcKyber768Secret,
+      );
+      expect(hybrid1, isNot(equals(hybridDifferentClassical)));
+
+      // Altering PQC secret changes output
+      final alteredPqc = List<int>.from(pqcKyber768Secret)..[0] ^= 0x01;
+      final hybridDifferentPqc = await deriveHybridSharedSecret(
+        classicalSecret: classicalX25519Secret,
+        postQuantumSecret: alteredPqc,
+      );
+      expect(hybrid1, isNot(equals(hybridDifferentPqc)));
+    });
+  });
+
+  group('Memory Zeroization & Keysets', () {
+    test('PqcGroupEpoch.zeroize clears backing buffer in place', () {
+      final secret = [10, 20, 30, 40, 50];
+      final epoch = PqcGroupEpoch(epochId: 'ep-1', secretKeyBytes: secret);
+      expect(epoch.secretKeyBytes.any((b) => b != 0), isTrue);
+
+      epoch.zeroize();
+      expect(epoch.secretKeyBytes.every((b) => b == 0), isTrue);
+    });
+
+    test('PqcDeviceKeyset copy helpers produce zeroizable byte buffers', () {
+      final suite = DartPqcPrimitiveSuite();
+      final keyset = suite.generateDeviceKeyset('dev-1');
+
+      final kemSecret = keyset.copyKemSecretKey();
+      expect(kemSecret.length, DartPqcPrimitiveSuite.kemSecretKeyLength);
+      expect(kemSecret.any((b) => b != 0), isTrue);
+
+      secureZero(kemSecret);
+      expect(kemSecret.every((b) => b == 0), isTrue);
+    });
+  });
+
+  group('PqcAtomicReplayStore Sliding Window Eviction', () {
+    test('evicts oldest entries when maxEntries is specified', () async {
+      final memoryStore = PqcMemoryAtomicStore();
+      final store = PqcAtomicReplayStore(memoryStore, maxEntries: 2);
+
+      // Claim 2 messages
+      final r1 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-1',
+        payloadDigest: 'a' * 64,
+      );
+      expect(r1, isNull);
+
+      final r2 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-2',
+        payloadDigest: 'b' * 64,
+      );
+      expect(r2, isNull);
+
+      // msg-1 is still remembered as duplicate
+      final dup1 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-1',
+        payloadDigest: 'a' * 64,
+      );
+      expect(dup1, 'a' * 64);
+
+      // Claim 3rd message -> triggers eviction of msg-1 from the window of 2
+      final r3 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-3',
+        payloadDigest: 'c' * 64,
+      );
+      expect(r3, isNull);
+
+      // msg-2 and msg-3 remain
+      final dup2 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-2',
+        payloadDigest: 'b' * 64,
+      );
+      expect(dup2, 'b' * 64);
+
+      final dup3 = await store.claim(
+        accountBinding: 'acc',
+        conversationId: 1,
+        messageId: 'msg-3',
+        payloadDigest: 'c' * 64,
+      );
+      expect(dup3, 'c' * 64);
     });
   });
 }

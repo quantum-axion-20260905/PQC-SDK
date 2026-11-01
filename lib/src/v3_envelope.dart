@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'crypto_utils.dart';
 import 'models.dart';
 
 /// Signed V3 wire envelope.  This is intentionally a small data object: key
@@ -51,8 +52,9 @@ class PqcV3Envelope {
     if (includeSignature && signature != null) 'signature': signature,
   };
 
-  /// Exact canonical bytes signed by V3.  Never change key insertion order.
-  String unsignedCanonicalJson() => jsonEncode(toJson(includeSignature: false));
+  /// Exact canonical bytes signed by V3 using RFC 8785 Canonical JSON (JCS).
+  String unsignedCanonicalJson() =>
+      canonicalJsonEncode(toJson(includeSignature: false));
 
   String encode() =>
       '$prefix:${base64UrlEncode(utf8.encode(jsonEncode(toJson())))}';

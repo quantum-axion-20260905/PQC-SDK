@@ -1,7 +1,9 @@
 import 'models.dart';
+import 'pqc_group_sender_key.dart';
 import 'primitives.dart';
 import 'v2_engine.dart';
 import 'v3_attachment_codec.dart';
+import 'v3_chunked_attachment.dart';
 import 'v3_group_codec.dart';
 import 'v3_private_codec.dart';
 
@@ -14,12 +16,16 @@ class PqcV3Engine implements PqcEngine {
     private = PqcV3PrivateCodec(this.primitives);
     group = PqcV3GroupCodec(this.primitives);
     attachment = PqcV3AttachmentCodec(this.primitives);
+    chunkedAttachment = PqcV3ChunkedAttachmentCodec(this.primitives);
+    senderKeyGroup = PqcGroupSenderKeyEngine(this.primitives);
   }
 
   final PqcPrimitiveSuite primitives;
   late final PqcV3PrivateCodec private;
   late final PqcV3GroupCodec group;
   late final PqcV3AttachmentCodec attachment;
+  late final PqcV3ChunkedAttachmentCodec chunkedAttachment;
+  late final PqcGroupSenderKeyEngine senderKeyGroup;
 
   @override
   String get engineId => 'pqc-v3';

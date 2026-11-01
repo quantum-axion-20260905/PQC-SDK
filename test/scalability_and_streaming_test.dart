@@ -187,6 +187,66 @@ void main() {
       );
       expect(readResult1.plaintext, 'Guruhga ikkinchi xabar!');
     });
+
+    test('group sessions handle multi-message streams and out-of-order packets', () async {
+      // 1. Setup sender and recipient sessions
+      final distResult = await engine.createDistribution(
+        conversationId: 600,
+        epochId: 'epoch-stream-1',
+        sender: sender,
+        memberDevices: [recipientA.publicKey],
+      );
+
+      final outbound = PqcGroupOutboundSession(
+        conversationId: 600,
+        epochId: 'epoch-stream-1',
+        sender: sender,
+        initialChainKey: distResult.senderChainKey,
+        primitives: primitives,
+      );
+
+      final memberChainKey = await engine.receiveDistribution(
+        distribution: distResult.distribution,
+        localKeysets: [recipientA],
+        trustedSigningKeysByDevice: {
+          sender.deviceId: {sender.signingPublicKeyBase64},
+        },
+      );
+
+      final inbound = PqcGroupInboundSession(
+        conversationId: 600,
+        epochId: 'epoch-stream-1',
+        senderDeviceId: sender.deviceId,
+        trustedSigningKeys: {sender.signingPublicKeyBase64},
+        initialChainKey: memberChainKey,
+        primitives: primitives,
+      );
+
+      // 2. Sender encrypts messages 0, 1, 2
+      final m0 = await outbound.encrypt('Msg #0');
+      final m1 = await outbound.encrypt('Msg #1');
+      final m2 = await outbound.encrypt('Msg #2');
+
+      // 3. Inbound receives Msg 0
+      expect(await inbound.decrypt(m0), 'Msg #0');
+
+      // 4. Inbound receives Msg 2 before Msg 1 (out-of-order)
+      expect(await inbound.decrypt(m2), 'Msg #2');
+
+      // 5. Later, delayed Msg 1 arrives and decrypts
+      expect(await inbound.decrypt(m1), 'Msg #1');
+
+      // 6. Replay of Msg 1 is rejected
+      expect(
+        () => inbound.decrypt(m1),
+        throwsA(isA<FormatException>()),
+      );
+
+      outbound.dispose();
+      inbound.dispose();
+      expect(outbound.isDisposed, isTrue);
+      expect(inbound.isDisposed, isTrue);
+    });
   });
 
   group('Replay Store Sliding Window and Eviction', () {

@@ -322,7 +322,7 @@ class PqcV3MessageCodec {
     required String senderDeviceId,
     required String senderKeysetId,
   }) => utf8.encode(
-    jsonEncode({
+    canonicalJsonEncode({
       'conversation_id': conversation.id,
       'conversation_type': conversation.type,
       'message_id': messageId,

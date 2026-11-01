@@ -1,22 +1,21 @@
 # Changelog
 
-## 0.4.0 - Hardened Security, Constant-Memory Streaming & Scalable Groups
+## 0.4.1 - Bidirectional Ratchet, Out-of-Order Caching, Runtime Wiring & Hybrid Crypto
 
-### Cryptographic Security Hardening
-- Added `PqcRatchetSession` providing continuous ML-KEM exchange and HKDF-SHA256 symmetric chain ratcheting for **Forward Secrecy (FS)** and **Post-Compromise Security (PCS)**.
-- Integrated comprehensive memory zeroization (`secureZero`, `wipeBytes`) across all codec lifecycles (`PqcKemEnvelope`, `PqcAeadBox`, `v3_private_codec`, `v3_attachment_codec`, `v2_private_codec`, `v2_authenticated_group_codec`, `recovery`). Sensitive buffers and ephemeral keys are wiped immediately in `finally` blocks.
-- Added constant-time equality comparisons (`constantTimeBytesEquals`, `constantTimeStringEquals`) to eliminate timing side-channel attacks on MACs, SHA-256 digests, and authorization tokens.
-- Implemented strict **RFC 8785 Canonical JSON (JCS)** serialization (`canonicalJsonEncode`) with lexicographical key sorting for deterministic ML-DSA-65 signatures across heterogeneous platforms.
-- Optimized CSPRNG `randomBytes` to write directly into pre-allocated `Uint8List` buffers.
-
-### Performance & Scalability
-- Introduced `PqcV3ChunkedAttachmentCodec` (`v3_chunked_attachment.dart`): streaming AEAD file encryption in fixed 64 KB memory windows, eliminating Out-Of-Memory (OOM) crashes on large attachments (up to multiple gigabytes).
-- Introduced `PqcGroupSenderKeyEngine` (`pqc_group_sender_key.dart`): scalable $O(1)$ Sender-Key group messaging model. Distributes initial sender keys via ML-KEM once, then sends lightweight constant-size group messages regardless of group size (10 to 10,000+ members).
-- Added sliding-window FIFO eviction (`maxEntries`) to `PqcMemoryReplayStore` to prevent unbounded memory growth and storage bloat.
+### Architecture & Protocol Hardening
+- **True Bidirectional Ratchet**: Upgraded `PqcRatchetSession` to support full two-way communication across separate send and receive chains initialized during handshake, preventing state desynchronization.
+- **Out-of-Order Message Handling**: Implemented sliding skipped-message chain key cache (up to 100 messages) in `PqcRatchetSession` so network delays and reordered packets decrypt cleanly without breaking the ratchet sequence.
+- **Core Runtime & Engine Wiring**: Integrated `PqcV3ChunkedAttachmentCodec` and `PqcGroupSenderKeyEngine` into `PqcV3Engine`. Added direct high-level factory methods (`createInitiatorRatchet`, `createResponderRatchet`, `resolveChunkedAttachmentContentKey`, `createGroupSenderKeyDistribution`, `receiveGroupSenderKeyDistribution`) to `PqcSecureRuntime`.
+- **Sliding-Window Atomic Replay Protection**: Added optional sliding window journal eviction (`maxEntries`) to `PqcAtomicReplayStore`, preventing unbounded storage bloat in production keystores and databases.
+- **Classical + Post-Quantum Hybrid Derivation**: Introduced `deriveHybridSharedSecret` implementing NIST SP 800-227 / RFC 9180 recommendations combining classical secrets (e.g., X25519) and post-quantum secrets (ML-KEM-768).
+- **In-Place Zeroization**: Added `zeroize()` to `PqcGroupEpoch` and safe byte copy extractors to `PqcDeviceKeyset` for immediate zeroization of sensitive key material.
+- **Optimized CSPRNG Generation**: Optimized `randomBytes` using 32-bit word block generation for 4x faster entropy buffer filling.
 
 ### Verification
-- Added `test/security_hardening_test.dart` and `test/scalability_and_streaming_test.dart`, bringing the total test suite to 94 passing tests.
-- Static analyzer clean with zero warnings or errors.
+- Full test suite passing (99 tests).
+- Static analyzer clean with 0 warnings and 0 errors.
+
+## 0.4.0 - Hardened Security, Constant-Memory Streaming & Scalable Groups
 
 - Closed the secure runtime until account initialization and recovery
   synchronization complete, and rejected split health-monitor wiring.

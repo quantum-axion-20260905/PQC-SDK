@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'crypto_utils.dart';
 import 'key_repository.dart';
 import 'key_continuity.dart';
 import 'models.dart';
@@ -752,8 +753,8 @@ bool _snapshotMaterialEquals(
   PqcKeyVaultSnapshot left,
   PqcKeyVaultSnapshot right,
 ) =>
-    jsonEncode({...left.toJson(), 'revision': 0}) ==
-    jsonEncode({...right.toJson(), 'revision': 0});
+    canonicalJsonEncode({...left.toJson(), 'revision': 0}) ==
+    canonicalJsonEncode({...right.toJson(), 'revision': 0});
 
 bool _bytesEqual(List<int> left, List<int> right) {
   if (left.length != right.length) return false;

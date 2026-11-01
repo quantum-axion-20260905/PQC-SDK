@@ -83,6 +83,15 @@ class PqcDeviceKeyset {
     kemPublicKeyBase64: kemPublicKeyBase64,
     signingPublicKeyBase64: signingPublicKeyBase64,
   );
+
+  /// Returns a newly allocated byte buffer of the KEM secret key.
+  /// The caller should zeroize it with [secureZero] after use.
+  Uint8List copyKemSecretKey() => Uint8List.fromList(base64Decode(kemSecretKeyBase64));
+
+  /// Returns a newly allocated byte buffer of the signing secret key.
+  /// The caller should zeroize it with [secureZero] after use.
+  Uint8List copySigningSecretKey() =>
+      Uint8List.fromList(base64Decode(signingSecretKeyBase64));
 }
 
 class PqcGroupEpoch {
@@ -91,6 +100,13 @@ class PqcGroupEpoch {
 
   final String epochId;
   final Uint8List secretKeyBytes;
+
+  /// Securely overwrites the epoch secret key buffer in place.
+  void zeroize() {
+    for (var i = 0; i < secretKeyBytes.length; i++) {
+      secretKeyBytes[i] = 0;
+    }
+  }
 }
 
 class PqcGroupPayloadMetadata {

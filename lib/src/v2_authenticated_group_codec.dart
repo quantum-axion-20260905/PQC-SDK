@@ -85,7 +85,7 @@ class PqcV2AuthenticatedGroupCodec {
       'mac': base64Encode(box.mac),
     };
     final signature = _primitives.sign(
-      message: utf8.encode(jsonEncode(unsigned)),
+      message: utf8.encode(canonicalJsonEncode(unsigned)),
       secretKeyBase64: sender.signingSecretKeyBase64,
     );
     return '$prefix:${_encode({...unsigned, 'signature': signature})}';
@@ -128,7 +128,7 @@ class PqcV2AuthenticatedGroupCodec {
         return const PqcDecodeError(PqcDecodeFailure.untrustedSender);
       }
       if (!_primitives.verify(
-        message: utf8.encode(jsonEncode(document)),
+        message: utf8.encode(canonicalJsonEncode(document)),
         signatureBase64: signature,
         publicKeyBase64: signingPublicKey,
       )) {
@@ -179,7 +179,7 @@ class PqcV2AuthenticatedGroupCodec {
     required String senderKeysetId,
     required String signingPublicKey,
   }) => utf8.encode(
-    jsonEncode({
+    canonicalJsonEncode({
       'protocol_version': PqcV2Wire.protocolVersion,
       'algorithm': algorithm,
       'conversation_id': conversation.id,

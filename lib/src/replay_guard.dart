@@ -50,10 +50,12 @@ class PqcMemoryReplayStore implements PqcReplayStore {
 
 /// Durable replay claims backed by the same atomic storage contract as keys.
 class PqcAtomicReplayStore implements PqcReplayStore {
-  const PqcAtomicReplayStore(this._store);
+  const PqcAtomicReplayStore(this._store, {this.maxEntries = 0});
 
   static const storageNamespace = 'pqc-engine-sdk.replay.v1';
+  static const _journalKey = '_pqc_replay_journal_v1';
   final PqcAtomicStore _store;
+  final int maxEntries;
 
   @override
   Future<String?> claim({
@@ -80,19 +82,27 @@ class PqcAtomicReplayStore implements PqcReplayStore {
         .toString();
     final existing = await _read(opaqueKey);
     if (existing != null) {
-      return _validatedDigest(existing);
+      final digest = _validatedDigest(existing);
+      if (digest != '0' * 64) {
+        return digest;
+      }
     }
     final bytes = utf8.encode(normalizedPayloadDigest);
     final saved = await _compareAndSet(
       key: opaqueKey,
-      expectedRevision: null,
+      expectedRevision: existing?.revision,
       value: PqcAtomicRecord(
-        revision: 1,
+        revision: (existing?.revision ?? 0) + 1,
         bytes: bytes,
         sha256: crypto.sha256.convert(bytes).toString(),
       ),
     );
-    if (saved) return null;
+    if (saved) {
+      if (maxEntries > 0) {
+        await _recordInJournal(opaqueKey);
+      }
+      return null;
+    }
     final winner = await _read(opaqueKey);
     if (winner == null) {
       throw const PqcVaultException(
@@ -101,6 +111,59 @@ class PqcAtomicReplayStore implements PqcReplayStore {
       );
     }
     return _validatedDigest(winner);
+  }
+
+  Future<void> _recordInJournal(String opaqueKey) async {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final current = await _read(_journalKey);
+      var keys = <String>[];
+      int? expectedRevision;
+      if (current != null) {
+        expectedRevision = current.revision;
+        try {
+          final decoded = jsonDecode(utf8.decode(current.bytes));
+          if (decoded is List) {
+            keys = decoded.map((e) => e.toString()).toList();
+          }
+        } catch (_) {}
+      }
+
+      keys.add(opaqueKey);
+      String? evictedKey;
+      if (maxEntries > 0 && keys.length > maxEntries) {
+        evictedKey = keys.removeAt(0);
+      }
+
+      final newBytes = utf8.encode(jsonEncode(keys));
+      final success = await _compareAndSet(
+        key: _journalKey,
+        expectedRevision: expectedRevision,
+        value: PqcAtomicRecord(
+          revision: (expectedRevision ?? 0) + 1,
+          bytes: newBytes,
+          sha256: crypto.sha256.convert(newBytes).toString(),
+        ),
+      );
+
+      if (success) {
+        if (evictedKey != null) {
+          final old = await _read(evictedKey);
+          if (old != null) {
+            final tombstone = utf8.encode('0' * 64);
+            await _compareAndSet(
+              key: evictedKey,
+              expectedRevision: old.revision,
+              value: PqcAtomicRecord(
+                revision: old.revision + 1,
+                bytes: tombstone,
+                sha256: crypto.sha256.convert(tombstone).toString(),
+              ),
+            );
+          }
+        }
+        break;
+      }
+    }
   }
 
   String _validatedDigest(PqcAtomicRecord record) {

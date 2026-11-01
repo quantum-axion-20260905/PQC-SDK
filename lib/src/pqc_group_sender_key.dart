@@ -336,6 +336,9 @@ class PqcGroupSenderKeyEngine {
 
     try {
       final packed = base64Decode(selectedWrap.wrappedKey);
+      if (packed.length < 28) {
+        throw const FormatException('Invalid wrappedKey payload length in recipient wrap.');
+      }
       final box = PqcAeadBox(
         nonce: packed.sublist(0, 12),
         ciphertext: packed.sublist(12, packed.length - 16),
@@ -414,5 +417,213 @@ class PqcGroupSenderKeyEngine {
       secureZero(messageKey);
       secureZero(clear);
     }
+  }
+
+  /// Derives an individual message key from the current chain key without advancing the chain.
+  Future<Uint8List> deriveMessageKey({
+    required List<int> chainKey,
+    required int sequenceNumber,
+  }) =>
+      _primitives.deriveKey(
+        secret: chainKey,
+        nonce: utf8.encode('msg-key-$sequenceNumber'),
+        info: utf8.encode('pqc-grp-msg-v1'),
+      );
+
+  /// Decrypts a group message using an already derived individual message key.
+  Future<String> decryptWithDerivedMessageKey({
+    required String payload,
+    required List<int> messageKey,
+    required Set<String> trustedSenderSigningKeys,
+  }) async {
+    final msg = PqcGroupSenderMessage.decode(payload);
+    if (msg.signatureBase64 == null) {
+      throw const FormatException('Missing group message signature.');
+    }
+
+    var signatureValid = false;
+    for (final key in trustedSenderSigningKeys) {
+      if (_primitives.verify(
+        message: utf8.encode(msg.unsignedCanonicalJson()),
+        signatureBase64: msg.signatureBase64!,
+        publicKeyBase64: key,
+      )) {
+        signatureValid = true;
+        break;
+      }
+    }
+    if (!signatureValid) {
+      throw const FormatException('Group message signature failed verification.');
+    }
+
+    Uint8List? clear;
+    try {
+      final aad = utf8.encode(
+        '${msg.conversationId}:${msg.epochId}:${msg.senderDeviceId}:${msg.sequenceNumber}',
+      );
+      clear = await _primitives.decryptAead(
+        box: PqcAeadBox(
+          nonce: base64Decode(msg.nonceBase64),
+          ciphertext: base64Decode(msg.ciphertextBase64),
+          mac: base64Decode(msg.macBase64),
+        ),
+        key: messageKey,
+        associatedData: aad,
+      );
+
+      return utf8.decode(clear, allowMalformed: false);
+    } finally {
+      secureZero(clear);
+    }
+  }
+}
+
+/// Outbound state manager for sending O(1) group messages in an epoch.
+class PqcGroupOutboundSession {
+  PqcGroupOutboundSession({
+    required this.conversationId,
+    required this.epochId,
+    required this.sender,
+    required List<int> initialChainKey,
+    required PqcPrimitiveSuite primitives,
+  }) : _chainKey = Uint8List.fromList(initialChainKey),
+       _primitives = primitives;
+
+  final int conversationId;
+  final String epochId;
+  final PqcDeviceKeyset sender;
+  final PqcPrimitiveSuite _primitives;
+  Uint8List _chainKey;
+  int _sequenceNumber = 0;
+  bool _isDisposed = false;
+
+  bool get isDisposed => _isDisposed;
+  int get sequenceNumber => _sequenceNumber;
+
+  Future<String> encrypt(String plaintext) async {
+    if (_isDisposed) throw StateError('Session is disposed.');
+    final engine = PqcGroupSenderKeyEngine(_primitives);
+    final result = await engine.encryptGroupMessage(
+      conversationId: conversationId,
+      epochId: epochId,
+      sequenceNumber: _sequenceNumber,
+      plaintext: plaintext,
+      sender: sender,
+      currentChainKey: _chainKey,
+    );
+    secureZero(_chainKey);
+    _chainKey = result.nextChainKey;
+    _sequenceNumber++;
+    return result.payload;
+  }
+
+  void dispose() {
+    if (_isDisposed) return;
+    secureZero(_chainKey);
+    _isDisposed = true;
+  }
+}
+
+/// Inbound state manager for decrypting group messages from a sender with out-of-order support.
+class PqcGroupInboundSession {
+  PqcGroupInboundSession({
+    required this.conversationId,
+    required this.epochId,
+    required this.senderDeviceId,
+    required this.trustedSigningKeys,
+    required List<int> initialChainKey,
+    required PqcPrimitiveSuite primitives,
+    this.maxSkippedMessages = 100,
+  }) : _chainKey = Uint8List.fromList(initialChainKey),
+       _primitives = primitives;
+
+  final int conversationId;
+  final String epochId;
+  final String senderDeviceId;
+  final Set<String> trustedSigningKeys;
+  final int maxSkippedMessages;
+  final PqcPrimitiveSuite _primitives;
+
+  Uint8List _chainKey;
+  int _receiveSequence = 0;
+  final Map<int, Uint8List> _skippedMessageKeys = {};
+  bool _isDisposed = false;
+
+  bool get isDisposed => _isDisposed;
+  int get receiveSequence => _receiveSequence;
+
+  Future<String> decrypt(String payload) async {
+    if (_isDisposed) throw StateError('Session is disposed.');
+    final msg = PqcGroupSenderMessage.decode(payload);
+    if (msg.conversationId != conversationId ||
+        msg.epochId != epochId ||
+        msg.senderDeviceId != senderDeviceId) {
+      throw const FormatException('Group message conversation/epoch/sender mismatch.');
+    }
+
+    final seq = msg.sequenceNumber;
+    if (seq < 0) {
+      throw const FormatException('Invalid sequence number in group message.');
+    }
+
+    final engine = PqcGroupSenderKeyEngine(_primitives);
+
+    if (seq < _receiveSequence) {
+      final messageKey = _skippedMessageKeys.remove(seq);
+      if (messageKey == null) {
+        throw const FormatException('Replay detected or old sequence number received.');
+      }
+      try {
+        return await engine.decryptWithDerivedMessageKey(
+          payload: payload,
+          messageKey: messageKey,
+          trustedSenderSigningKeys: trustedSigningKeys,
+        );
+      } finally {
+        secureZero(messageKey);
+      }
+    }
+
+    if (seq - _receiveSequence > maxSkippedMessages) {
+      throw FormatException(
+        'Too many skipped messages in group sequence: gap is ${seq - _receiveSequence}.',
+      );
+    }
+
+    while (_receiveSequence < seq) {
+      final skippedMsgKey = await engine.deriveMessageKey(
+        chainKey: _chainKey,
+        sequenceNumber: _receiveSequence,
+      );
+      _skippedMessageKeys[_receiveSequence] = skippedMsgKey;
+      final next = await _primitives.deriveKey(
+        secret: _chainKey,
+        nonce: utf8.encode('advance-chain'),
+        info: utf8.encode('grp-step-$_receiveSequence'),
+      );
+      secureZero(_chainKey);
+      _chainKey = next;
+      _receiveSequence++;
+    }
+
+    final result = await engine.decryptGroupMessage(
+      payload: payload,
+      currentChainKey: _chainKey,
+      trustedSenderSigningKeys: trustedSigningKeys,
+    );
+    secureZero(_chainKey);
+    _chainKey = result.nextChainKey;
+    _receiveSequence = seq + 1;
+    return result.plaintext;
+  }
+
+  void dispose() {
+    if (_isDisposed) return;
+    secureZero(_chainKey);
+    for (final key in _skippedMessageKeys.values) {
+      secureZero(key);
+    }
+    _skippedMessageKeys.clear();
+    _isDisposed = true;
   }
 }
